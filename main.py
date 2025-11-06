@@ -55,7 +55,8 @@ def build_main_kb() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text="📅 Розклад"),
                 KeyboardButton(text="⭐️ Free VIP"),
-                KeyboardButton(text="📖 Політика")
+                KeyboardButton(text="📖 Політика"),
+                KeyboardButton(text="📰 Новини")
             ]
         ],
         resize_keyboard=True,
@@ -68,7 +69,7 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text="📅 Розклад"),
-                KeyboardButton(text="📅 Розклад за днями"),
+                KeyboardButton(text="📰 Новини"),
                 KeyboardButton(text="🈴 Середній бал")
             ],
             [
@@ -353,6 +354,11 @@ async def news_command(message: Message, state: FSMContext):
 @router.message(F.text == "📅 Розклад")
 async def kb_diary(message: Message, state: FSMContext):
     await get_diary(message, state)
+
+
+@router.message(F.text == "📰 Новини")
+async def kb_news(message: Message, state: FSMContext):
+    await news_command(message, state)
 
 
 @router.message(F.text == "📅 Розклад за днями")
