@@ -361,11 +361,6 @@ async def kb_news(message: Message, state: FSMContext):
     await news_command(message, state)
 
 
-@router.message(F.text == "📅 Розклад за днями")
-async def kb_vip_diary(message: Message, state: FSMContext):
-    await diary_days_command(message)
-
-
 @router.message(F.text == "🈴 Середній бал")
 async def kb_avg_grades(message: Message, state: FSMContext):
     await get_grades(message, state)
