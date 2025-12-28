@@ -3,13 +3,16 @@ import datetime
 import time
 import re
 from html import escape
-from loader import db, bot, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE, KYIV_TZ
+from loader import db, bot, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE, KYIV_TZ, fernet
 from services.diarynz import get_diary_schedule, get_grade_events
 from services.diaryhuman import get_diary_schedule_human
 import gc
 
 LESSON_TIMES = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
 LEAD_MIN = 5
+LESSON_LINE_RE = re.compile(
+    r"^\s*\d+\.\s*(?:<i>)?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})(?:</i>)?\s*(.+?):\s*(.+)\s*$"
+)
 
 
 async def sleep_to_next_minute():
@@ -51,7 +54,6 @@ def _has_conf_link(s: str) -> bool:
 async def check_lessons():
     while True:
         now = datetime.datetime.now(KYIV_TZ)
-
         # берем всех сразу один раз в минуту
         users = db.get_users_with_notify()  # [(user_id, login, enc_password, provider), ...]
 
@@ -148,8 +150,8 @@ async def check_lessons():
                 else:
                     continue
 
-            except Exception:
-                pass
+            except Exception as e:
+                print(e)
 
         await sleep_to_next_minute()
 
