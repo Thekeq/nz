@@ -82,11 +82,11 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
 
     # 3. Шрифти (без змін)
     try:
-        font_title = ImageFont.truetype("../fonts/Montserrat-Bold.ttf", 80)
-        font_big = ImageFont.truetype("../fonts/Montserrat-ExtraBold.ttf", 250)
-        font_med = ImageFont.truetype("../fonts/Montserrat-SemiBold.ttf", 70)
-        font_small = ImageFont.truetype("../fonts/Montserrat-Regular.ttf", 50)
-        font_footer = ImageFont.truetype("../fonts/Montserrat-Light.ttf", 40)
+        font_title = ImageFont.truetype("fonts/Montserrat-Bold.ttf", 80)
+        font_big = ImageFont.truetype("fonts/Montserrat-ExtraBold.ttf", 250)
+        font_med = ImageFont.truetype("fonts/Montserrat-SemiBold.ttf", 70)
+        font_small = ImageFont.truetype("fonts/Montserrat-Regular.ttf", 50)
+        font_footer = ImageFont.truetype("fonts/Montserrat-Light.ttf", 40)
     except IOError:
         font_title = ImageFont.load_default()
         font_big = ImageFont.load_default()
@@ -149,7 +149,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
         y=1100,
         text=f"Оцінок отримано: {lessons_count}",
         font=font_med,
-        icon_path="../icons/book.png",
+        icon_path="icons/book.png",
         color=theme["text_color"]
     )
 
@@ -158,7 +158,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
         y=1300,
         text="Найкращий предмет",
         font=font_small,
-        icon_path="../icons/crown.png",
+        icon_path="icons/crown.png",
         color=theme["accent_color"]  # Використовуємо акцентний колір (золотий/неон/тощо)
     )
 
