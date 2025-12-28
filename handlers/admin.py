@@ -1,10 +1,12 @@
 import asyncio
+import time
+
 from aiogram import Router
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import Message
 from loader import db, bot, ADMIN_ID
-from keyboards import build_vip_kb
+from keyboards import build_vip_kb, build_main_kb
 import datetime
 
 router = Router()
@@ -54,6 +56,46 @@ async def gift_vip(message: Message):
         await message.answer("⚠️ Юзеру видано, але повідомлення не надіслано (можливо, бот заблокований).")
 
 
+@router.message(Command("gift_tokens"))
+async def gift_tokens(message: Message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+
+    # Перевірка аргументів
+    if len(message.text.split()) != 3:
+        await message.answer("Формат: /gift_tokens <user_id> <days>\n")
+        return
+
+    try:
+        _, target_id_str, tokens_str = message.text.split()
+        reply_id = int(target_id_str)
+        tokens = int(tokens_str)
+    except ValueError:
+        await message.answer("❌ ID та токени мають бути числами.")
+        return
+
+    # Викликаємо оновлену функцію БД
+    old = db.get_tokens(reply_id)
+    db.set_tokens(reply_id, old + tokens)
+
+    # Отримуємо новий баланс для підтвердження
+    new = db.get_tokens(reply_id)
+
+    # Формуємо красивий текст
+    await message.answer(f"✅ Видано AI-tokens: <b>{tokens}</b>", parse_mode="HTML")
+
+    try:
+        await bot.send_message(
+            reply_id,
+            f"🎉 Ви отримали AI-tokens: <b>{tokens}</b>\n"
+            f"💎 Ваш баланс: <b>{new}</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        await message.answer("⚠️ Юзеру видано, але повідомлення не надіслано (можливо, бот заблокований).")
+
+
 @router.message(Command("bc"))
 async def broadcast(message: Message):
     user_id = message.from_user.id
@@ -71,18 +113,24 @@ async def broadcast(message: Message):
     count, failed = 0, 0
 
     for (uid,) in users:
+        vip_flag, expires = db.get_vip_status(uid)
+        now_ts = int(time.time())
+        is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+        kb = build_vip_kb() if is_vip else build_main_kb()
         try:
-            await bot.send_message(uid, text, parse_mode="HTML")
+            await bot.send_message(uid, text, parse_mode="HTML",
+                                   reply_markup=kb)
             count += 1
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.1)
 
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
             # повторим один раз
             try:
-                await bot.send_message(uid, text, parse_mode="HTML")
+                await bot.send_message(uid, text, parse_mode="HTML",
+                                       reply_markup=kb)
                 count += 1
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.1)
             except Exception:
                 failed += 1
 

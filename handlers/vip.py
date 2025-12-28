@@ -66,7 +66,16 @@ async def vip_func(message: Message):
             f"⏰ Нагадування за 5-хв до уроку\n"
             f"🔔 Сповіщення про нові оцінки (NZ)\n"
             f"📊 Розширений рейтинг та статистика\n"
-            f"⚡ Пріоритетні запити та швидка підтримка", reply_markup=share_kb(user_id)
+            f"⚡ Пріоритетні запити та швидка підтримка\n\n"
+            f"💎 <b>Оберіть спосіб оплати VIP:</b>\n"
+            f"⭐️ <b>Telegram Stars (75 ⭐️)</b>\n"
+            f"Натисніть кнопку нижче. Активація миттєва.\n\n"
+            f"🐈 <b>Monobank (Банка) 75 грн</b>\n"
+            f"Реквізити банки: <code>4874 1000 2294 2034</code>\n"
+            f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n\n"
+            f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
+            f"👉 <code>{user_id}</code> 👈\n"
+            f"<i>(натисніть щоб скопіювати)</i>", reply_markup=share_kb(user_id)
         )
 
         prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=75)]  # сума в XTR-центах
