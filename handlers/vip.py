@@ -4,6 +4,8 @@ import datetime
 import random
 import re
 import gc
+from html import escape
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery, BufferedInputFile, \
     InlineQueryResultCachedPhoto, InlineQuery
@@ -11,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE
+from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID
 from utils import track_activity, fix_ai_response, user_can_call
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb
 from states import AIStates, WrappedState
@@ -587,5 +589,3 @@ async def turn_notify(message: Message):
         else:
             db.toggle_notify(user_id)
             await message.answer("✅ Нагадування увімкнені! За 5 хв. до урока вам буде надіслано сповіщення.")
-# ... (Встав сюди successful_payment, pre_checkout, ai_start, ai_input_text_or_photo, handle_ai_homework, send_wrapped, generate_vip_wrapped, inline_share_handler, leaderboard_cmd, pick_winner_cmd, turn_notify, turn_notify_grades)
-# Не забудь про імпорти process_referral_reward (можна винести в цей файл або в utils)

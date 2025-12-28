@@ -1,6 +1,6 @@
 import time
 import re
-from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, db
+from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, db, bot
 
 DEFAULT_COOLDOWN = 5
 

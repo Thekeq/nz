@@ -388,6 +388,10 @@ def build_vip_grade_summary(text: str) -> str:
     return forecast_block + rating_block
 
 
+HUMAN_AVG_RE = re.compile(r"⭐️\s*<b>Середній:</b>\s*([0-9]+(?:\.[0-9]+)?)")
+HUMAN_DYN_RE = re.compile(r"^•\s*(\d{2}\.\d{2}):\s*<b>([0-9]+(?:\.[0-9]+)?)</b>", re.MULTILINE)
+
+
 def build_vip_grade_summary_human(text: str) -> str:
     """
     VIP-блоки для Human.

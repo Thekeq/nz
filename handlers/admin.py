@@ -1,5 +1,6 @@
 import asyncio
 from aiogram import Router
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import Message
 from loader import db, bot, ADMIN_ID
