@@ -50,10 +50,10 @@ async def vip_func(message: Message):
             f"⏰ /notify — <b>Нагадування перед уроками</b>\n"
             f"🔔 /notify_grades — <b>Сповіщення о нових оцінках (nz)</b>\n"
             f"⚡ <b>Пріоритетні запити та підтримка</b>\n\n"
-            f"🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 5 днів за кожних 3 друзів\n"
+            f"<blockquote>🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 5 днів за кожних 3 друзів\n"
             f"Ваше реферальне посилання:\n"
-            f"https://t.me/nzdiary_bot?start={user_id}",
-            parse_mode="HTML"
+            f"https://t.me/nzdiary_bot?start={user_id}</blockquote>", reply_markup=share_kb(user_id),
+            parse_mode="HTML", disable_web_page_preview=True
         )
     else:
         await message.answer(
@@ -68,14 +68,15 @@ async def vip_func(message: Message):
             f"📊 Розширений рейтинг та статистика\n"
             f"⚡ Пріоритетні запити та швидка підтримка\n\n"
             f"💎 <b>Оберіть спосіб оплати VIP:</b>\n"
-            f"⭐️ <b>Telegram Stars (75 ⭐️)</b>\n"
-            f"Натисніть кнопку нижче. Активація миттєва.\n\n"
+            f"<blockquote>⭐️ <b>Telegram Stars (75 ⭐️)</b>\n"
+            f"Натисніть кнопку нижче. Активація миттєва.</blockquote>\n\n"
             f"🐈 <b>Monobank (Банка) 75 грн</b>\n"
-            f"Реквізити банки: <code>4874 1000 2294 2034</code>\n"
+            f"<blockquote>Реквізити банки: <code>4874 1000 2294 2034</code>\n"
             f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n\n"
             f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
             f"👉 <code>{user_id}</code> 👈\n"
-            f"<i>(натисніть щоб скопіювати)</i>", reply_markup=share_kb(user_id)
+            f"<i>(натисніть щоб скопіювати)</i></blockquote>", reply_markup=share_kb(user_id),
+            disable_web_page_preview=True
         )
 
         prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=75)]  # сума в XTR-центах
@@ -204,6 +205,15 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("ai_hw:"))
 async def handle_ai_homework(callback: CallbackQuery):
     user_id = callback.from_user.id
+    # перевіряємо VIP
+    vip_flag, expires = db.get_vip_status(user_id)
+    now_ts = int(time.time())
+    is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+    if not is_vip:
+        await callback.message.answer("🔒 Ця функція доступна лише /vip користувачам")
+        await callback.answer()
+        return
+
     temp_id = callback.data.split(":")[1]
     hw_text = HW_AI_CACHE.get(temp_id)
 
@@ -290,7 +300,7 @@ async def send_wrapped(message: Message, state: FSMContext):
                     else:
                         best_subject = "Не знайдено"
                 except:
-                    avg, total = 0.0, 0
+                    avg, total, best_subject = 0.0, 0, "Не знайдено"
             else:
                 grades, text = await asyncio.to_thread(get_diary_grades, login, password, 7)
 
@@ -372,6 +382,7 @@ async def send_wrapped(message: Message, state: FSMContext):
             await wait_msg.delete()
         except:
             pass
+        print(e)
         await message.answer("❌ Щось пішло не так. Спробуйте пізніше.")
 
 
@@ -502,50 +513,6 @@ async def leaderboard_cmd(message: Message):
         text += f"\n👤 <b>Твоє місце:</b> {user_rank + 1} ({my_count} друзів)"
     else:
         text += "\n👤 Ти не береш участі в рейтингу (потрібен VIP статус)."
-
-    await message.answer(text, parse_mode="HTML")
-
-
-@router.message(Command("pick_winner"))
-async def pick_winner_cmd(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return  # Тільки для адміна
-
-    # 1. Отримуємо "барабан" із квитками
-    drum = db.get_raffle_participants(days=14)
-
-    if not drum:
-        await message.answer("❌ Немає учасників для розіграшу (потрібні VIP користувачі).")
-        return
-
-    # 2. Рандомно обираємо переможця
-    winner_id = random.choice(drum)
-
-    # 3. Рахуємо статистику для звіту
-    total_tickets = len(drum)
-    winner_tickets = drum.count(winner_id)
-    chance = round((winner_tickets / total_tickets) * 100, 2)
-
-    try:
-        # Отримуємо дані переможця
-        chat = await message.bot.get_chat(winner_id)
-        username = f"@{chat.username}" if chat.username else "немає юзернейму"
-        name = chat.first_name or "Користувач"
-    except Exception:
-        username = "невідомо"
-        name = "Користувач"
-
-    # 4. Формуємо повідомлення для адміна з посиланням на профіль
-    text = (
-        f"🎉 <b>ПЕРЕМОЖЕЦЬ ОБРАНИЙ!</b>\n\n"
-        f"👤 <b>Ім'я:</b> {name}\n"
-        f"🆔 <b>ID:</b> <code>{winner_id}</code>\n"
-        f"🔗 <b>Username:</b> {username}\n"
-        f"🎟 <b>Квитків у нього:</b> {winner_tickets}\n"
-        f"📈 <b>Шанс був:</b> {chance}%\n\n"
-        f"👉 <a href='tg://user?id={winner_id}'>ВІДКРИТИ ПРОФІЛЬ ТА ПОДАРУВАТИ</a>\n\n"
-        f"<i>Тепер ти можеш переслати це повідомлення в канал або зробити скріншот!</i>"
-    )
 
     await message.answer(text, parse_mode="HTML")
 

@@ -5,6 +5,7 @@ import uuid
 import pytz
 from loader import HW_AI_CACHE
 from utils import clean_html
+from urllib.parse import quote
 
 KYIV_TZ = pytz.timezone("Europe/Kiev")
 CANONICAL_DAYS = ["понеділок", "вівторок", "середа", "четвер", "пʼятниця"]
@@ -67,19 +68,28 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
 
 
 def share_kb(user_id: int):
-    text = (
-        "📚 Я користуюсь ботом для NZ.ua\n"
-        "Він показує розклад, оцінки та надсилає нагадування перед уроками.\n"
-        "Зручно і швидко 👌\n\n"
-        f"https://t.me/nzdiary_bot?start={user_id}"
+    # 1. Твоє реферальне посилання
+    ref_link = f"https://t.me/nzdiary_bot?start={user_id}"
+
+    # 2. Текст опису (без самого посилання, воно додасться окремо)
+    description = (
+        "\n📱 Мій шкільний асистент у Telegram\n\n"
+        "• Оцінки з NZ.ua та Human\n"
+        "• Розклад уроків\n"
+        "• Нагадування перед уроком\n\n"
+        "Спробуй, це зручніше за сайт 👇"
     )
+
+    # 3. Формуємо спеціальне посилання для шерингу
+    # t.me/share/url?url={ПОСИЛАННЯ}&text={ТЕКСТ}
+    share_url = f"https://t.me/share/url?url={quote(ref_link)}&text={quote(description)}"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📤 Поділитись у чат",
-                    switch_inline_query=text
+                    text="📤 Запросити друга",
+                    url=share_url  # 👈 Використовуємо url, а не switch_inline_query
                 )
             ]
         ]
@@ -214,7 +224,7 @@ def add_ai_button(kb: InlineKeyboardMarkup, text_content: str) -> InlineKeyboard
     """Додає кнопку ШІ до існуючої клавіатури, зберігаючи текст у кеш."""
     # 1. Очищаємо текст і зберігаємо в кеш
     clean_text = clean_html(text_content)
-    if clean_text == "✅ Д/з не знайдено.":
+    if clean_text == "✅ Д/з не знайдено." or clean_text == "📚 ДЗ на тиждень —":
         return kb
     temp_id = str(uuid.uuid4())[:8]
     HW_AI_CACHE[temp_id] = clean_text

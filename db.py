@@ -510,21 +510,22 @@ class DataBase:
     def get_activity_summary(self, days: int = 7):
         today_date = datetime.date.today()
         today_ordinal = today_date.toordinal()
+
+        # Для активності (Activity)
         min_day = today_ordinal - (days - 1)
+
+        # Для нових юзерів (New Users) - ТЕПЕР ПО КАЛЕНДАРЮ (00:00:00)
+        # Це виправить розбіжність з графіком
+        start_date = today_date - datetime.timedelta(days=days - 1)
+        start_of_period = int(datetime.datetime.combine(start_date, datetime.time.min).timestamp())
+
+        # Границі сьогоднішнього дня для new_today
+        start_of_today = int(datetime.datetime.combine(today_date, datetime.time.min).timestamp())
+        end_of_today = start_of_today + 24 * 60 * 60
         now_ts = int(datetime.datetime.now().timestamp())
 
-        # границы сегодняшнего дня
-        start_of_today = int(datetime.datetime.combine(
-            today_date, datetime.time.min
-        ).timestamp())
-        end_of_today = start_of_today + 24 * 60 * 60
-
-        # граница периода days назад
-        start_of_period = int((
-                                      datetime.datetime.now() - datetime.timedelta(days=days)
-                              ).timestamp())
-
         with self.connection:
+            # Основний запит активності
             rows = self.cursor.execute(
                 """
                 SELECT u.user_id,
@@ -532,33 +533,22 @@ class DataBase:
                        s.vip,
                        s.expires
                 FROM users u
-                LEFT JOIN activity a
-                  ON a.user_id = u.user_id
-                 AND a.day >= ?
-                LEFT JOIN subs s
-                  ON s.user_id = u.user_id
+                LEFT JOIN activity a ON a.user_id = u.user_id AND a.day >= ?
+                LEFT JOIN subs s ON s.user_id = u.user_id
                 GROUP BY u.user_id
                 """,
                 (min_day,)
             ).fetchall()
 
-            total_creds = self.cursor.execute(
-                "SELECT COUNT(*) FROM creds"
-            ).fetchone()[0]
+            total_creds = self.cursor.execute("SELECT COUNT(*) FROM creds").fetchone()[0]
 
             new_today = self.cursor.execute(
-                """
-                SELECT COUNT(*) FROM users
-                WHERE created_at >= ? AND created_at < ?
-                """,
+                "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
                 (start_of_today, end_of_today)
             ).fetchone()[0]
 
             new_days = self.cursor.execute(
-                """
-                SELECT COUNT(*) FROM users
-                WHERE created_at >= ?
-                """,
+                "SELECT COUNT(*) FROM users WHERE created_at >= ?",
                 (start_of_period,)
             ).fetchone()[0]
 
@@ -579,7 +569,7 @@ class DataBase:
             else:
                 if is_vip:
                     valuable += 1
-                if not is_vip:
+                else:
                     very_active += 1
 
         return {
@@ -593,3 +583,45 @@ class DataBase:
             "very_active": very_active,
             "valuable": valuable,
         }
+
+    def get_daily_growth(self, days: int = 7):
+        # 1. Рахуємо timestamp початку періоду
+        start_date = datetime.date.today() - datetime.timedelta(days=days - 1)
+        start_ts = int(datetime.datetime.combine(start_date, datetime.time.min).timestamp())
+
+        with self.connection:
+            # 2. SQL: Групуємо по даті (YYYY-MM-DD)
+            # Використовуємо sqlite модифікатор 'unixepoch', щоб перетворити число в дату
+            rows = self.cursor.execute(
+                """
+                SELECT date(created_at, 'unixepoch', 'localtime') as day_date, 
+                       COUNT(*) as cnt
+                FROM users
+                WHERE created_at >= ?
+                GROUP BY day_date
+                ORDER BY day_date ASC
+                """,
+                (start_ts,)
+            ).fetchall()
+
+        # 3. Перетворюємо результат SQL у словник: {'2024-01-01': 5, '2024-01-03': 2}
+        data_map = {r[0]: r[1] for r in rows}
+
+        # 4. Формуємо красиві списки для графіка (Labels і Data)
+        # Нам треба пройтися по кожному дню, навіть якщо там було 0 юзерів
+        labels = []
+        counts = []
+
+        current_date = start_date
+        today = datetime.date.today()
+
+        while current_date <= today:
+            date_str = current_date.strftime("%Y-%m-%d")  # Ключ для пошуку
+            label_str = current_date.strftime("%d.%m")  # Красива дата для графіка (03.01)
+
+            labels.append(label_str)
+            counts.append(data_map.get(date_str, 0))  # Якщо дати немає в базі, ставимо 0
+
+            current_date += datetime.timedelta(days=1)
+
+        return labels, counts

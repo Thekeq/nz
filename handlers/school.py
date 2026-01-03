@@ -16,7 +16,9 @@ from services.diaryhuman import get_diary_schedule_human, get_diary_homework_hum
     get_diary_grades_human
 
 router = Router()
-GRADE_LINE_RE = re.compile(r"^(.+?):\s*(\d+|.*?)\s*//\s*(.*)$")
+GRADE_LINE_RE = re.compile(
+    r"^(.+?):\s*([0-9]+(?:\.[0-9]+)?)\s*\((\d+)\s+оцін", re.IGNORECASE
+)
 
 
 # ... (Сюди встав функції get_diary, homework_cmd, news_command, get_grades з main.py)
@@ -463,6 +465,3 @@ def build_vip_grade_summary_human(text: str) -> str:
         forecast_block += f"{trend_line}\n"
 
     return forecast_block + "\n" + rating_block
-
-# ... (Встав сюди homework_cmd, news_command, get_grades, diary_day_selected, diary_hw_selected з main.py)
-# ... Також helper-функції build_vip_grade_summary, parse_grades_text
