@@ -6,6 +6,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
+from quickchart import QuickChart
 
 from loader import db, fernet, SEMAPHORE
 from utils import user_can_call, track_activity, process_referral_reward
@@ -172,6 +173,61 @@ async def news_command(message: Message, state: FSMContext):
         await message.answer(f"❌ Помилка при отриманні новин: {e}")
 
 
+def photo_grades(text):
+    items = parse_grades_text(text)  # Твоя функция: [(Subject, Avg, Count), ...]
+
+    # Фильтруем топ-5 предметов для красоты (или берем все, если влезет)
+    # Берем только название и средний балл
+    labels = [item[0][:22] for item in items]  # Обрезаем длинные названия
+    data = [item[1] for item in items]
+
+    # 3. Рисуем Radar Chart (Паутинка)
+    qc = QuickChart()
+    qc.width = 800
+    qc.height = 800  # Квадрат
+    qc.device_pixel_ratio = 2.0
+    qc.background_color = "#1e1e1e"
+
+    qc.config = {
+        "type": "radar",
+        "data": {
+            "labels": labels,
+            "datasets": [{
+                "label": "Успішність",
+                "data": data,
+                "backgroundColor": "rgba(52, 152, 219, 0.4)",  # Полупрозрачный синий
+                "borderColor": "#3498db",
+                "pointBackgroundColor": "#fff",
+                "borderWidth": 3
+            }]
+        },
+        "options": {
+            "legend": {"display": False},
+            "scale": {
+                "ticks": {
+                    "beginAtZero": True,
+                    "max": 12,  # Максимум 12 баллов
+                    "backdropColor": "transparent",  # Прозрачный фон цифр
+                    "fontColor": "#bdc3c7"
+                },
+                "gridLines": {"color": "#444"},  # Сетка
+                "pointLabels": {
+                    "fontSize": 16,
+                    "fontColor": "#fff",
+                    "fontStyle": "bold"
+                }
+            },
+            "title": {
+                "display": True,
+                "text": "Твоя статистика (VIP)",
+                "fontColor": "#fff",
+                "fontSize": 24
+            }
+        }
+    }
+    return qc.get_url()
+
+
 @router.message(Command('avg_grades'))
 @router.message(F.text == "📊 Статистика")
 async def get_grades(message: Message, state: FSMContext):
@@ -207,14 +263,15 @@ async def get_grades(message: Message, state: FSMContext):
         is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
         if is_vip:
-            if provider == "human":
-                extra = build_vip_grade_summary_human(text)
+            extra = build_vip_grade_summary_human(text) if provider == "human" else build_vip_grade_summary(text)
+            final_text = f"{text}\n\n{extra}" if extra else text
+
+            if provider == "nz":
+                url = photo_grades(text)
+                await message.answer_photo(photo=url, caption=final_text, parse_mode="HTML")
             else:
-                extra = build_vip_grade_summary(text)
-            if extra:
-                await message.answer(f"{text}\n\n{extra}")
-            else:
-                await message.answer(text)
+                await message.answer(final_text, parse_mode="HTML")
+
         else:
             await message.answer(text)
 

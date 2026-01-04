@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 from typing import Tuple, Dict, Any
 from urllib.parse import urljoin
 import hashlib
@@ -336,20 +337,18 @@ def get_diary_homework(login: str, password: str, days: list[str] | None = None)
         scraper.close()
 
 
-def get_diary_grades(login: str, password: str, days_back: int = None) -> str | tuple[dict[Any, Any], str] | tuple[
-    dict[str, float | None], str]:
+def get_diary_grades(login: str, password: str, days_back: int = None) -> tuple[dict[str, float | None], str]:
     scraper = cloudscraper.create_scraper()
     try:
-        # 1. Загружаем главную страницу, чтобы достать CSRF
+        # --- 1. ЛОГИН ---
         r = scraper.get("https://nz.ua/")
         soup = BeautifulSoup(r.text, "html.parser")
 
         csrf_tag = soup.find("input", {"name": "_csrf"})
         if not csrf_tag:
-            return "Не удалось получить CSRF токен."
+            return {}, "Не удалось получить CSRF токен."
         csrf = csrf_tag["value"]
 
-        # 2. Формируем данные для входа
         data = {
             '_csrf': csrf,
             'LoginForm[login]': login,
@@ -359,85 +358,135 @@ def get_diary_grades(login: str, password: str, days_back: int = None) -> str | 
             'login-button': 'undefined',
         }
 
-        login_url = "https://nz.ua/login"
-        resp = scraper.post(login_url, data=data)
+        resp = scraper.post("https://nz.ua/login", data=data)
+        if resp.url != "https://nz.ua/":
+            return {}, "Неверный логин или пароль, либо капча."
 
-        if resp.url == "https://nz.ua/":
-            # успешный логин
-            grades_url = "https://nz.ua/schedule/grades-statement"
+        # --- 2. ПОЛУЧАЕМ СПИСОК СЕМЕСТРОВ ---
+        grades_url = "https://nz.ua/schedule/grades-statement"
+
+        # Делаем первый заход, чтобы получить список семестров
+        initial_resp = scraper.get(grades_url)
+        soup = BeautifulSoup(initial_resp.text, "html.parser")
+
+        # Ищем выпадающий список семестров
+        select_box = soup.find("select", {"id": "personalselectform-semester_id"})
+        if not select_box:
+            return {}, "Не удалось найти список семестров."
+
+        # Находим текущий выбранный семестр (чтобы понять текущий год)
+        selected_option = select_box.find("option", selected=True)
+        if not selected_option:
+            # Если ничего не выбрано, берем первый попавшийся как референс
+            selected_option = select_box.find("option")
+
+        # Парсим текст, например: "2025-2026 [1], ..." -> Нам нужно "2025-2026"
+        current_option_text = selected_option.get_text()
+        year_match = re.search(r"(\d{4}-\d{4})", current_option_text)
+
+        if not year_match:
+            return {}, "Не удалось определить текущий учебный год."
+
+        current_year_str = year_match.group(1)  # "2025-2026"
+
+        # Собираем ID всех семестров, которые относятся к ЭТОМУ году
+        # Например, найдем ID для "2025-2026 [1]" и "2025-2026 [2]"
+        target_semester_ids = []
+        for option in select_box.find_all("option"):
+            if current_year_str in option.get_text():
+                target_semester_ids.append(option["value"])
+
+        # Если мы не нашли семестров (странно), берем хотя бы текущий
+        if not target_semester_ids:
+            target_semester_ids.append(selected_option["value"])
+
+        # --- 3. СБОР ОЦЕНОК ПО ВСЕМ СЕМЕСТРАМ ---
+
+        # Словарь для хранения ВСЕХ оценок: {"Математика": [10, 11, 9], "Физика": [8]}
+        all_grades_data = defaultdict(list)
+
+        # Ищем CSRF токен конкретно для формы смены семестра (он может отличаться)
+        semester_form = soup.find("form", {"id": "semester-select-form"})
+        semester_csrf = csrf  # фоллбек
+        if semester_form:
+            csrf_input = semester_form.find("input", {"name": "_csrf"})
+            if csrf_input:
+                semester_csrf = csrf_input["value"]
+
+        # Проходимся по каждому семестру года (1-й и 2-й)
+        for sem_id in target_semester_ids:
+            # А. Меняем семестр на сервере
+            change_data = {
+                '_csrf': semester_csrf,
+                'semester_id': sem_id
+            }
+            # Важно: это POST запрос, он просто меняет состояние сессии
+            scraper.post('https://nz.ua/site/semester-change', data=change_data)
+
+            # Б. Загружаем страницу оценок для ЭТОГО семестра
+            # Если нужны days_back, параметры добавляем, но для общего среднего лучше брать всё
             params = {}
-
             if days_back is not None:
+                # Если пользователь хочет фильтр по датам, применяем его
                 now = datetime.datetime.now()
-                # date_to = сьогодні
                 date_to_str = now.strftime("%Y-%m-%d")
-                # date_from = сьогодні мінус days_back
                 date_from_str = (now - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
+                params = {"date_from": date_from_str, "date_to": date_to_str}
 
-                params = {
-                    "date_from": date_from_str,
-                    "date_to": date_to_str
-                }
-
+            # Делаем GET запрос уже с новым семестром
             diary_resp = scraper.get(grades_url, params=params)
-            soup = BeautifulSoup(diary_resp.text, "html.parser")
+            sem_soup = BeautifulSoup(diary_resp.text, "html.parser")
 
-            def _find_date_input(name):
-                inp = soup.find("input", {"name": name})
-                if inp and inp.get("value"):
-                    return inp.get("value").strip()
-                # fallback по id
-                inp = soup.find("input", {"id": name})
-                if inp and inp.get("value"):
-                    return inp.get("value").strip()
-                return None
-
-            date_from = _find_date_input("date_from") or _find_date_input("classselectform-date_from")
-            date_to = _find_date_input("date_to") or _find_date_input("classselectform-date_to")
-
-            if date_from and date_to:
-                range_line = f"📅 Діапазон дат: {date_from} — {date_to}\n\n"
-            elif date_from:
-                range_line = f"📅 Дата початку: {date_from}\n\n"
-            elif date_to:
-                range_line = f"📅 Дата закінчення: {date_to}\n\n"
-            else:
-                range_line = ""
-
-            table = soup.select_one("table.marks-report tbody")
+            table = sem_soup.select_one("table.marks-report tbody")
             if not table:
-                return {}, "Нічого не знайдено."
+                continue
 
-            averages = {}
-            lines = []
             for tr in table.select("tr"):
                 tds = tr.find_all("td")
                 if len(tds) < 3:
                     continue
-                subj = tds[1].get_text(strip=True)
-                results_text = tds[2].get_text(" ", strip=True)  # "1, 8, Н, п/п" -> "1, 8, Н, п/п"
 
-                # Найдём все целые числа в строке (1..99). Это достаёт "12" из "12 (Тест)"
+                # Имя предмета
+                subj = tds[1].get_text(strip=True)
+                # Строка оценок
+                results_text = tds[2].get_text(" ", strip=True)
+
+                # Парсим числа
                 nums = re.findall(r"\b\d{1,2}\b", results_text)
                 nums = [int(n) for n in nums]
 
                 if nums:
-                    avg = round(sum(nums) / len(nums), 2)
-                    averages[subj] = avg
-                    lines.append(f"{subj}: {avg} ({len(nums)} оцінок)")
-                else:
-                    averages[subj] = None
-                    # можно вывести оригинальный results_text, если нужно
-                    if results_text:
-                        lines.append(f"{subj}: — (ненумерічні оцінки: {results_text})")
-                    else:
-                        lines.append(f"{subj}: — (нема оцінок)")
+                    all_grades_data[subj].extend(nums)
 
-            # Форматированный текст для Telegram
-            formatted = range_line + "📊 Середній бал по предметам:\n\n" + "\n".join(lines)
-            return averages, formatted
+        # --- 4. РАСЧЕТ ИТОГОВОГО СРЕДНЕГО ---
+
+        final_averages = {}
+        lines = []
+
+        # Сортируем предметы по алфавиту для красоты
+        for subj in sorted(all_grades_data.keys()):
+            grades_list = all_grades_data[subj]
+            if grades_list:
+                avg = round(sum(grades_list) / len(grades_list), 2)
+                final_averages[subj] = avg
+                lines.append(f"{subj}: {avg} ({len(grades_list)} оцінок)")
+            else:
+                final_averages[subj] = None
+                lines.append(f"{subj}: — (нема оцінок)")
+
+        # Заголовок
+        header = f"🎓 <b>Річна статистика ({current_year_str})</b>\n"
+        if days_back:
+            header += f"📅 За останні {days_back} днів\n"
+        header += "\n📊 Середній бал (Семестр 1 + 2):\n\n"
+
+        formatted = header + "\n".join(lines)
+
+        return final_averages, formatted
+
     except Exception as e:
-        raise e
+        print(f"Error: {e}")
+        return {}, f"Помилка отримання даних: {e}"
     finally:
         scraper.close()
 
