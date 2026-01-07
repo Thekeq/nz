@@ -115,13 +115,13 @@ async def gift_tokens(message: Message):
     new = db.get_tokens(reply_id)
 
     # Формуємо красивий текст
-    await message.answer(f"✅ Видано AI-tokens: <b>{tokens}</b>", parse_mode="HTML")
+    await message.answer(f"✅ Видано AI-tokens: <b>{tokens:,}</b>", parse_mode="HTML")
 
     try:
         await bot.send_message(
             reply_id,
-            f"🎉 Ви отримали AI-tokens: <b>{tokens}</b>\n"
-            f"💎 Ваш баланс: <b>{new}</b>",
+            f"🎉 Ви отримали AI-tokens: <b>{tokens:,}</b>\n"
+            f"💎 Ваш баланс: <b>{new:,}/1,000,000</b>",
             parse_mode="HTML"
         )
     except Exception:

@@ -14,7 +14,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID
-from utils import track_activity, fix_ai_response, user_can_call
+from utils import track_activity, fix_ai_response, user_can_call, compact_num
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb
 from states import AIStates, WrappedState
 from services.ai import ai
@@ -43,6 +43,7 @@ async def vip_func(message: Message):
             date_str = "НАЗАВЖДИ :)"
         await message.answer(
             f"⭐️ Ви маєте VIP до <b>{date_str}</b>\n\n"
+            f"🏆 /leaderboard - <b>Розіграш 100 ⭐️ кожні 2 тижні</b>\n"
             f"✨ /ai — <b>Використання ШІ</b>\n"
             f"👕 /wrapped — <b>Ексклюзивні теми (Matrix, Gold, Ocean)</b>\n"
             f"📅 /diary_days (/diary) — <b>Перегляд розкладу по дням</b>\n"
@@ -60,6 +61,7 @@ async def vip_func(message: Message):
             "🎁 Безкоштовний VIP: 3 друга → 5 днів VIP\n"
             f"Ваше реферальне посилання: https://t.me/nzdiary_bot?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
+            f"🏆 Розіграш 100 ⭐️ кожні 2 тижні\n"
             f"🎨 Ексклюзивні теми (Matrix, Gold, Ocean)\n"
             f"✨ Використання ШІ-асистента\n"
             f"📅 Перегляд розкладу по дням\n"
@@ -101,7 +103,7 @@ async def successful_payment(message: Message):
     vip, expires = db.get_vip_status(user_id)
     date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
     await message.answer(f"✅ Ви отримали VIP доступ до {date_str}\n"
-                         f"💎 Вам нараховано <b>1 000 000 AI-токенів</b>!", reply_markup=build_vip_kb())
+                         f"💎 Вам нараховано <b>1,000,000 AI-токенів</b>!", reply_markup=build_vip_kb())
 
 
 @router.pre_checkout_query()
@@ -121,7 +123,7 @@ async def ai_start(message: Message, state: FSMContext):
         await state.set_state(AIStates.waiting_input)
         await message.reply(
             "✨ Напиши питання текстом або надішли фото з підписом\n"
-            f"У вас ще 💎 <b>{current_tokens:,}</b> токенів", reply_markup=InlineKeyboardMarkup(
+            f"У вас ще 💎 <b>{compact_num(current_tokens)}/1M</b> токенів", reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="Вийти з режиму ШІ ✨", callback_data="exit_ai")]
                 ]
@@ -288,8 +290,10 @@ async def send_wrapped(message: Message, state: FSMContext):
 
         # 1. ОТРИМАННЯ ДАНИХ
         async with SEMAPHORE:
+            days_back = datetime.datetime.now().weekday() + 1
+
             if provider == "human":
-                text = await asyncio.to_thread(get_diary_grades_human, login, password, 7)
+                text = await asyncio.to_thread(get_diary_grades_human, login, password, days_back)
                 try:
                     avg = float(re.search(r'Середній:</b>\s*([\d.]+)', text).group(1))
                     total = int(re.search(r'Всього:\s*<b>(\d+)</b>', text).group(1))
@@ -298,11 +302,11 @@ async def send_wrapped(message: Message, state: FSMContext):
                         best_subject = match.group(1)  # Наприклад: "Геометрія (10.5)"
                         best_subject = best_subject.rsplit(" (", 1)[0]
                     else:
-                        best_subject = "Не знайдено"
+                        best_subject = "Тиша..."
                 except:
-                    avg, total, best_subject = 0.0, 0, "Не знайдено"
+                    avg, total, best_subject = 0.0, 0, "Тиша..."
             else:
-                grades, text = await asyncio.to_thread(get_diary_grades, login, password, 7)
+                grades, text = await asyncio.to_thread(get_diary_grades, login, password, days_back)
 
                 values = [v for v in grades.values() if isinstance(v, (int, float))]
                 filtered = {k: v for k, v in grades.items() if isinstance(v, (int, float))}

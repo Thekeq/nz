@@ -59,8 +59,11 @@ async def process_referral_reward(user_id: int):
         db.set_vip(referrer_id, 5)
 
         # 2. Нараховуємо токени
+        MAX_TOKENS = 1000000
+        REWARD = 150000
+
         current_tokens = db.get_tokens(referrer_id)
-        new_balance = current_tokens + 150000
+        new_balance = min(current_tokens + REWARD, MAX_TOKENS)
         db.set_tokens(referrer_id, new_balance)
 
         # 3. Повідомляємо
@@ -70,7 +73,7 @@ async def process_referral_reward(user_id: int):
                 f"🎉 <b>Вітаємо! Ви запросили 3 друзів!</b>\n\n"
                 f"⭐️ VIP продовжено на <b>5 днів</b>\n"
                 f"💎 Нараховано <b>150,000</b> ШІ токенів\n"
-                f"💰 Ваш баланс: <b>{new_balance:,}</b> токенів",
+                f"💰 Ваш баланс: <b>{compact_num(new_balance)}/{compact_num(MAX_TOKENS)}</b> токенів",
                 parse_mode="HTML"
             )
         except Exception:
@@ -83,3 +86,13 @@ async def process_referral_reward(user_id: int):
             )
         except Exception:
             pass
+
+
+def compact_num(num):
+    if num >= 1_000_000:
+        val = round(num / 1_000_000, 1)  # Округляємо до 1 знаку (1.5M)
+        return f"{val}M".replace(".0M", "M")  # Прибираємо .0, якщо число ціле
+    elif num >= 1_000:
+        val = round(num / 1_000, 1)
+        return f"{val}K".replace(".0K", "K")
+    return str(num)
