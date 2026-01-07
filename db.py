@@ -5,13 +5,12 @@ import datetime
 class DataBase:
     def __init__(self, db_file):
         self.connection = sqlite3.connect(db_file, check_same_thread=False)
-        self.cursor = self.connection.cursor()
         self._init_schema()
 
     def _init_schema(self):
         with self.connection:
             # Основная информация о пользователе (рефералы, приглашения)
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                   user_id        INTEGER PRIMARY KEY,
                   referrer_id    INTEGER,
@@ -22,7 +21,7 @@ class DataBase:
             """)
 
             # Логин и пароль NZ
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS creds (
                   user_id    INTEGER PRIMARY KEY,
                   login      TEXT,
@@ -33,7 +32,7 @@ class DataBase:
             """)
 
             # VIP, срок, нотификации
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS subs (
                   user_id  INTEGER PRIMARY KEY,
                   vip      INTEGER NOT NULL DEFAULT 0,
@@ -43,7 +42,7 @@ class DataBase:
                 )
             """)
             # Таблица активності користувачів по днях
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS activity (
                   user_id INTEGER NOT NULL,
                   day     INTEGER NOT NULL,      -- номер дня (ordinal)
@@ -55,28 +54,28 @@ class DataBase:
 
             # --- after CREATE TABLE subs ---
             try:
-                self.cursor.execute("ALTER TABLE subs ADD COLUMN notify_grades INTEGER NOT NULL DEFAULT 0")
+                self.connection.execute("ALTER TABLE subs ADD COLUMN notify_grades INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
 
             try:
-                self.cursor.execute("ALTER TABLE creds ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;")
-                self.cursor.execute("ALTER TABLE creds ADD COLUMN verified_at INTEGER;")
+                self.connection.execute("ALTER TABLE creds ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;")
+                self.connection.execute("ALTER TABLE creds ADD COLUMN verified_at INTEGER;")
             except Exception:
                 pass
 
             try:
-                self.cursor.execute("ALTER TABLE creds ADD COLUMN provider TEXT NOT NULL DEFAULT 'nz';")
+                self.connection.execute("ALTER TABLE creds ADD COLUMN provider TEXT NOT NULL DEFAULT 'nz';")
             except Exception:
                 pass
 
                 # на всякий: старые строки могли остаться NULL
             try:
-                self.cursor.execute("UPDATE creds SET provider='nz' WHERE provider IS NULL OR provider='';")
+                self.connection.execute("UPDATE creds SET provider='nz' WHERE provider IS NULL OR provider='';")
             except Exception:
                 pass
             # last sent grade hash per user
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS grades_state (
                   user_id INTEGER PRIMARY KEY,
                   last_hash TEXT,
@@ -85,7 +84,7 @@ class DataBase:
                 )
             """)
 
-            self.cursor.execute("""
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS ref_rewarded (
                   user_id     INTEGER PRIMARY KEY,      -- тот, кого пригласили
                   referrer_id INTEGER NOT NULL,         -- кто пригласил
@@ -94,7 +93,7 @@ class DataBase:
             """)
 
             try:
-                self.cursor.execute("ALTER TABLE subs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
+                self.connection.execute("ALTER TABLE subs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
 
@@ -114,7 +113,7 @@ class DataBase:
             # 2. Робимо LEFT JOIN з ref_rewarded (щоб порахувати запрошених)
             # 3. Фільтруємо тільки активних VIP
             # 4. Фільтруємо запрошення тільки за останні N днів
-            rows = self.cursor.execute(
+            rows = self.connection.execute(
                 """
                 SELECT s.user_id, COUNT(r.user_id) as invite_count
                 FROM subs s
@@ -148,18 +147,18 @@ class DataBase:
         """Встановлює фіксовану кількість токенів (перезаписує старе значення)."""
         self.ensure_user(user_id)
         with self.connection:
-            self.cursor.execute("UPDATE subs SET tokens=? WHERE user_id=?", (amount, user_id))
+            self.connection.execute("UPDATE subs SET tokens=? WHERE user_id=?", (amount, user_id))
 
     def get_tokens(self, user_id: int) -> int:
         """Повертає баланс токенів користувача."""
         with self.connection:
-            row = self.cursor.execute("SELECT tokens FROM subs WHERE user_id=?", (user_id,)).fetchone()
+            row = self.connection.execute("SELECT tokens FROM subs WHERE user_id=?", (user_id,)).fetchone()
             return int(row[0] or 0) if row else 0
 
     def deduct_tokens(self, user_id: int, amount: int):
         """Віднімає токени. Не дозволяє опуститися нижче 0."""
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 "UPDATE subs SET tokens = MAX(0, tokens - ?) WHERE user_id=?",
                 (amount, user_id)
             )
@@ -170,18 +169,18 @@ class DataBase:
         Дальше False (значит уже засчитали).
         """
         with self.connection:
-            self.cursor.execute(
+            cur = self.connection.execute(
                 """
                 INSERT OR IGNORE INTO ref_rewarded(user_id, referrer_id)
                 SELECT user_id, referrer_id FROM users WHERE user_id=?
                 """,
                 (user_id,)
             )
-            return self.cursor.rowcount == 1
+            return cur.rowcount == 1
 
     def get_referrer_for_reward(self, user_id: int) -> int | None:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT referrer_id FROM users WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -190,16 +189,16 @@ class DataBase:
     def add_invite_and_get(self, user_id: int, delta: int = 1) -> int:
         self.ensure_user(user_id)
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 "UPDATE users SET invites = invites + ? WHERE user_id=?",
                 (delta, user_id)
             )
             if delta > 0:
-                self.cursor.execute(
+                self.connection.execute(
                     "UPDATE users SET total_invites = total_invites + ? WHERE user_id=?",
                     (delta, user_id)
                 )
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT invites FROM users WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -212,22 +211,22 @@ class DataBase:
         """
         self.ensure_user(user_id)
         with self.connection:
-            self.cursor.execute(
+            cur = self.connection.execute(
                 "UPDATE users SET invites = invites - ? WHERE user_id=? AND invites >= ?",
                 (need, user_id, need)
             )
-            return self.cursor.rowcount == 1
+            return cur.rowcount == 1
 
     def ensure_user(self, user_id: int):
         with self.connection:
-            self.cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
-            self.cursor.execute("INSERT OR IGNORE INTO subs(user_id) VALUES (?)", (user_id,))
+            self.connection.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
+            self.connection.execute("INSERT OR IGNORE INTO subs(user_id) VALUES (?)", (user_id,))
 
     # ===== Credentials (login/password) =====
 
     def has_credentials(self, user_id: int) -> bool:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT login, password FROM creds WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -235,14 +234,14 @@ class DataBase:
 
     def set_creds_verified(self, user_id: int, val: int = 1):
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 "UPDATE creds SET verified=?, verified_at=strftime('%s','now') WHERE user_id=?",
                 (val, user_id)
             )
 
     def is_creds_verified(self, user_id: int) -> bool:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT verified FROM creds WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -250,7 +249,7 @@ class DataBase:
 
     def count_verified_by_provider(self, provider: str) -> int:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT COUNT(*) FROM creds WHERE verified=1 AND provider=?",
                 (provider,)
             ).fetchone()
@@ -258,7 +257,7 @@ class DataBase:
 
     def user_exists(self, user_id: int) -> bool:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT 1 FROM users WHERE user_id=? LIMIT 1",
                 (user_id,)
             ).fetchone()
@@ -266,7 +265,7 @@ class DataBase:
 
     def get_user(self, user_id: int):
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT login, password, COALESCE(provider,'nz') FROM creds WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -276,7 +275,7 @@ class DataBase:
         self.ensure_user(user_id)
         provider = provider if provider in ("nz", "human") else "nz"
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 """
                 INSERT INTO creds(user_id, login, password, provider, updated_at)
                 VALUES (?, ?, ?, ?, strftime('%s','now'))
@@ -292,7 +291,7 @@ class DataBase:
     def delete_user(self, user_id: int):
         # logout: удаляем только логин/пароль, VIP не трогаем
         with self.connection:
-            self.cursor.execute("DELETE FROM creds WHERE user_id=?", (user_id,))
+            self.connection.execute("DELETE FROM creds WHERE user_id=?", (user_id,))
 
     # ===== VIP =====
 
@@ -307,7 +306,7 @@ class DataBase:
             add_sec = int(datetime.timedelta(days=days).total_seconds())
 
             with self.connection:
-                row = self.cursor.execute(
+                row = self.connection.execute(
                     "SELECT vip, expires FROM subs WHERE user_id=?",
                     (user_id,)
                 ).fetchone()
@@ -328,7 +327,7 @@ class DataBase:
                 else:
                     new_expires = now + add_sec
 
-        self.cursor.execute(
+        self.connection.execute(
             """
             INSERT INTO subs(user_id, vip, expires)
             VALUES (?, 1, ?)
@@ -339,7 +338,7 @@ class DataBase:
 
     def get_vip_status(self, user_id: int):
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT vip, expires FROM subs WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -353,13 +352,13 @@ class DataBase:
     def toggle_notify(self, user_id: int) -> bool:
         self.ensure_user(user_id)
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT notify FROM subs WHERE user_id=?",
                 (user_id,)
             ).fetchone()
             current = int(row[0] or 0) if row else 0
             new_val = 0 if current == 1 else 1
-            self.cursor.execute(
+            self.connection.execute(
                 """
                 INSERT INTO subs(user_id, notify) VALUES (?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET notify=excluded.notify
@@ -370,7 +369,7 @@ class DataBase:
 
     def user_notify(self, user_id: int) -> bool:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT notify FROM subs WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -378,7 +377,7 @@ class DataBase:
 
     def get_users_with_notify(self):
         with self.connection:
-            return self.cursor.execute(
+            return self.connection.execute(
                 """
                 SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
                 FROM subs s
@@ -391,13 +390,13 @@ class DataBase:
     def toggle_notify_grades(self, user_id: int) -> bool:
         self.ensure_user(user_id)
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT notify_grades FROM subs WHERE user_id=?",
                 (user_id,)
             ).fetchone()
             current = int(row[0] or 0) if row else 0
             new_val = 0 if current == 1 else 1
-            self.cursor.execute(
+            self.connection.execute(
                 """
                 INSERT INTO subs(user_id, notify_grades) VALUES (?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET notify_grades=excluded.notify_grades
@@ -408,7 +407,7 @@ class DataBase:
 
     def user_notify_grades(self, user_id: int) -> bool:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT notify_grades FROM subs WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -416,7 +415,7 @@ class DataBase:
 
     def get_users_with_grades_notify(self):
         with self.connection:
-            return self.cursor.execute(
+            return self.connection.execute(
                 """
                 SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
                 FROM subs s
@@ -428,7 +427,7 @@ class DataBase:
 
     def get_last_grade_hashes(self, user_id: int) -> list[str]:
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT last_hash FROM grades_state WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -444,7 +443,7 @@ class DataBase:
         value = "|".join(hashes[:3])
 
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 """
                 INSERT INTO grades_state(user_id, last_hash, updated_at)
                 VALUES (?, ?, strftime('%s','now'))
@@ -460,7 +459,7 @@ class DataBase:
 
     def get_referrer(self, user_id: int):
         with self.connection:
-            row = self.cursor.execute(
+            row = self.connection.execute(
                 "SELECT referrer_id FROM users WHERE user_id=?",
                 (user_id,)
             ).fetchone()
@@ -476,17 +475,17 @@ class DataBase:
         self.ensure_user(user_id)
         self.ensure_user(referrer_id)
         with self.connection:
-            self.cursor.execute(
+            cur = self.connection.execute(
                 "UPDATE users SET referrer_id=? WHERE user_id=? AND referrer_id IS NULL",
                 (referrer_id, user_id)
             )
-            return self.cursor.rowcount > 0
+            return cur.rowcount > 0
 
     # ===== Broadcast =====
 
     def get_all_users(self):
         with self.connection:
-            return self.cursor.execute("SELECT user_id FROM users").fetchall()
+            return self.connection.execute("SELECT user_id FROM users").fetchall()
 
     # ===== Activity (commands per day/week) =====
 
@@ -498,7 +497,7 @@ class DataBase:
         self.ensure_user(user_id)
         today = datetime.date.today().toordinal()
         with self.connection:
-            self.cursor.execute(
+            self.connection.execute(
                 """
                 INSERT INTO activity(user_id, day, actions)
                 VALUES (?, ?, 1)
@@ -526,7 +525,7 @@ class DataBase:
 
         with self.connection:
             # Основний запит активності
-            rows = self.cursor.execute(
+            rows = self.connection.execute(
                 """
                 SELECT u.user_id,
                        COALESCE(SUM(a.actions), 0) AS total_actions,
@@ -540,14 +539,14 @@ class DataBase:
                 (min_day,)
             ).fetchall()
 
-            total_creds = self.cursor.execute("SELECT COUNT(*) FROM creds").fetchone()[0]
+            total_creds = self.connection.execute("SELECT COUNT(*) FROM creds").fetchone()[0]
 
-            new_today = self.cursor.execute(
+            new_today = self.connection.execute(
                 "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
                 (start_of_today, end_of_today)
             ).fetchone()[0]
 
-            new_days = self.cursor.execute(
+            new_days = self.connection.execute(
                 "SELECT COUNT(*) FROM users WHERE created_at >= ?",
                 (start_of_period,)
             ).fetchone()[0]
@@ -592,7 +591,7 @@ class DataBase:
         with self.connection:
             # 2. SQL: Групуємо по даті (YYYY-MM-DD)
             # Використовуємо sqlite модифікатор 'unixepoch', щоб перетворити число в дату
-            rows = self.cursor.execute(
+            rows = self.connection.execute(
                 """
                 SELECT date(created_at, 'unixepoch', 'localtime') as day_date, 
                        COUNT(*) as cnt
