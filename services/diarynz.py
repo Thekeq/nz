@@ -42,7 +42,7 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
     scraper = cloudscraper.create_scraper()
     try:
         # 1. Отримуємо CSRF
-        r = scraper.get("https://nz.ua/")
+        r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         csrf_tag = soup.find("input", {"name": "_csrf"})
         if not csrf_tag:
@@ -271,7 +271,7 @@ def get_diary_homework(login: str, password: str, days: list[str] | None = None)
     scraper = cloudscraper.create_scraper()
     try:
         # 1) CSRF
-        r = scraper.get("https://nz.ua/")
+        r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         csrf_tag = soup.find("input", {"name": "_csrf"})
         if not csrf_tag:
@@ -379,7 +379,7 @@ def get_diary_grades(login: str, password: str, days_back: int = None) -> tuple[
     scraper = cloudscraper.create_scraper()
     try:
         # --- 1. ЛОГИН ---
-        r = scraper.get("https://nz.ua/")
+        r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
         csrf_tag = soup.find("input", {"name": "_csrf"})
@@ -536,7 +536,7 @@ def get_grade_events(login: str, password: str, limit: int = 20) -> list[dict]:
     """
     scraper = cloudscraper.create_scraper()
     try:
-        r = scraper.get("https://nz.ua/")
+        r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         csrf_tag = soup.find("input", {"name": "_csrf"})
         if not csrf_tag:
@@ -605,7 +605,7 @@ def get_diary_news(login: str, password: str, limit: int = 10) -> str:
     scraper = cloudscraper.create_scraper()
     try:
         # 1) CSRF
-        r = scraper.get("https://nz.ua/")
+        r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         csrf_tag = soup.find("input", {"name": "_csrf"})
         if not csrf_tag:
