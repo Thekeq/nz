@@ -240,6 +240,24 @@ async def broadcast(message: Message):
     await message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
 
 
+@router.message(Command("msg"))
+async def admin_msg(message: Message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+
+    try:
+        args = message.text.split(" ", 2)
+        receiver_id = args[1]
+        msg = args[2]
+        
+        await bot.send_message(receiver_id, text=f"📩 Повідомлення від адміна:\n{msg}", parse_mode="HTML")
+        await message.reply(f"✅ Надіслано повідомлення юзеру {receiver_id}\n"
+                            f"Текст:\n{msg}")
+    except Exception as e:
+        await message.reply(f"Помилка: {e}")
+
+
 # --- ХЕЛПЕРИ (Винеси їх окремо, або залиш над хендлером) ---
 
 def _get_activity_chart(stats, days):
