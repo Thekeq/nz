@@ -38,9 +38,10 @@ def pick_best_link(box):
     return links[0]
 
 
-def get_diary_schedule(login: str, password: str, days: list[str] | None = None) -> str:
+def get_diary_schedule(login: str, password: str, days: list[str] | None = None, is_tiktok_mode: bool = False) -> str:
     scraper = cloudscraper.create_scraper()
     try:
+        # ... [Тут весь твой код логина и получения CSRF без изменений] ...
         # 1. Отримуємо CSRF
         r = scraper.get("https://nz.ua/", timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
@@ -71,44 +72,31 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
             msg = (j.get("loginform-password") or j.get("loginform-login") or ["Сталася невідома помилка"])[0]
             raise Exception(msg)
 
-        # 3. Отримуємо розклад (перший раз)
+        # 3. Отримуємо розклад
         scraper.post("https://nz.ua/login", data=data)
         diary_resp = scraper.get("https://nz.ua/schedule/diary")
         soup = BeautifulSoup(diary_resp.text, "html.parser")
 
-        # --- [НОВЕ] ЛОГІКА ВИБОРУ ПОТОЧНОГО СЕМЕСТРУ ---
+        # --- ЛОГІКА ВИБОРУ ПОТОЧНОГО СЕМЕСТРУ ---
         semester_select = soup.find("select", {"id": "personalselectform-semester_id"})
         if semester_select:
-            # Шукаємо option, де в тексті є "(поточний)"
             current_option = semester_select.find("option", string=lambda text: text and "(поточний)" in text)
-
             if current_option:
                 current_sem_id = current_option.get("value")
-
-                # Відправляємо запит на зміну семестру
-                scraper.post("https://nz.ua/site/semester-change", data={
-                    "_csrf": csrf,
-                    "semester_id": current_sem_id
-                }, headers=headers)
-
-                # ОБОВ'ЯЗКОВО: Перезавантажуємо сторінку розкладу з новим семестром
+                scraper.post("https://nz.ua/site/semester-change", data={"_csrf": csrf, "semester_id": current_sem_id},
+                             headers=headers)
                 diary_resp = scraper.get("https://nz.ua/schedule/diary")
                 soup = BeautifulSoup(diary_resp.text, "html.parser")
         # -----------------------------------------------
 
         diary_items = soup.select(".diary-item")
-
-        if days is None:
-            days = ["сьогодні", "завтра"]
-
+        if days is None: days = ["сьогодні", "завтра"]
         schedule_by_day = {}
 
-        # --- Допоміжна функція для дати ---
         def extract_date_text(txt):
             match = re.search(r'(\d{1,2}\s+[а-яіїє]+)', txt)
             return match.group(1) if match else ""
 
-        # --- Допоміжна функція для посилань (якщо її немає в глобальній області) ---
         def pick_best_link(box_element):
             btn = box_element.select_one("a.btn.btn-success")
             if btn: return btn.get("href")
@@ -118,12 +106,10 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                 if href and "nz.ua" not in href: return href
             return None
 
-        # ------------------------------------------------------------------------
-
+        # --- ПАРСИНГ ---
         for item in diary_items:
             title_tag = item.select_one(".diary-item__title")
-            if not title_tag:
-                continue
+            if not title_tag: continue
             title_text = title_tag.get_text(strip=True).lower()
 
             if "сьогодні" in title_text or "сегодня" in title_text:
@@ -133,14 +119,10 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
             else:
                 base_name = title_text.split(",")[0].strip()
 
-            if base_name not in days:
-                continue
+            if base_name not in days: continue
 
             date_part = extract_date_text(title_text)
-            if date_part:
-                display_name = f"{base_name.capitalize()} — {date_part}"
-            else:
-                display_name = base_name.capitalize()
+            display_name = f"{base_name.capitalize()} — {date_part}" if date_part else base_name.capitalize()
 
             schedule_by_day[display_name] = []
 
@@ -148,11 +130,7 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                 subject_tag = box.select_one(".diary-item__label")
                 time_tag = box.select_one(".diary-item__time")
 
-                if time_tag:
-                    time = " - ".join(t.strip() for t in time_tag.stripped_strings)
-                else:
-                    time = None
-
+                time = " - ".join(t.strip() for t in time_tag.stripped_strings) if time_tag else None
                 meet_link = pick_best_link(box)
                 subject = subject_tag.get_text(strip=True) if subject_tag else "——"
 
@@ -162,47 +140,38 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                     "meet": meet_link
                 })
 
-        # --- Блок для "Завтра" (пагінація) ---
+        # --- БЛОК ЗАВТРА (ПАГІНАЦІЯ) ---
         if "завтра" in days:
             has_tomorrow = any(k.lower().startswith("завтра") for k in schedule_by_day.keys())
             if not has_tomorrow:
                 next_link_tag = soup.select_one("a.pnl-next.diary-link")
                 href = next_link_tag.get("href") if next_link_tag else None
-
                 if href:
                     next_url = urljoin("https://nz.ua", href)
                     next_resp = scraper.get(next_url)
                     next_soup = BeautifulSoup(next_resp.text, "html.parser")
                     next_items = next_soup.select(".diary-item")
-
                     if next_items:
                         item = next_items[0]
                         title_tag = item.select_one(".diary-item__title")
                         display_name_next = "Завтра"
-
                         if title_tag:
                             next_text = title_tag.get_text(strip=True).lower()
                             date_part = extract_date_text(next_text)
-                            if date_part:
-                                display_name_next = f"Завтра — {date_part}"
+                            if date_part: display_name_next = f"Завтра — {date_part}"
 
                         schedule_by_day[display_name_next] = []
                         for box in item.select(".diary-box"):
                             subject_tag = box.select_one(".diary-item__label")
                             time_tag = box.select_one(".diary-item__time")
-                            if time_tag:
-                                time = " - ".join(t.strip() for t in time_tag.stripped_strings)
-                            else:
-                                time = None
+                            time = " - ".join(t.strip() for t in time_tag.stripped_strings) if time_tag else None
                             meet_link = pick_best_link(box)
                             subject = subject_tag.get_text(strip=True) if subject_tag else "——"
                             schedule_by_day[display_name_next].append({
-                                "subject": subject,
-                                "time": time,
-                                "meet": meet_link
+                                "subject": subject, "time": time, "meet": meet_link
                             })
 
-        # --- ФОРМУВАННЯ ТЕКСТУ (Твоя стара логіка) ---
+        # --- ФОРМУВАННЯ ТЕКСТУ (З TIKTOK MODE) ---
         output = ""
         for day_header, lessons in schedule_by_day.items():
             output += f"📅 <b>{day_header}</b>\n"
@@ -211,32 +180,38 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
             for idx, lesson in enumerate(lessons, start=1):
                 if lesson["subject"] != "——":
                     last_index = idx
-
             visible_lessons = lessons[:last_index]
-            if not visible_lessons:
-                output += "<i>Уроків немає</i>\n"
+            if not visible_lessons: output += "<i>Уроків немає</i>\n"
 
             for i, lesson in enumerate(visible_lessons, start=1):
                 output += f"{i}. "
-                if lesson["time"]:
-                    output += f"<i>{lesson['time']}</i> "
-
+                if lesson["time"]: output += f"<i>{lesson['time']}</i> "
                 output += lesson["subject"]
 
-                # ТОЧНО як у тебе було:
-                if lesson['meet']:
-                    output += f": {lesson['meet']}"
+                link = lesson['meet']
+                if link:
+                    # 🔥🔥🔥 TIKTOK LOGIC 🔥🔥🔥
+                    if is_tiktok_mode:
+                        # Если ссылка длинная, прячем последние 8 символов
+                        if len(link) > 15:
+                            safe_part = link[:-8]
+                            hidden_part = link[-8:]
+                            # Используем Telegram Spoiler
+                            final_link_text = f"{safe_part}<tg-spoiler>{hidden_part}</tg-spoiler>"
+                            output += f": {final_link_text}"
+                        else:
+                            # Если ссылка короткая, просто под спойлер всю
+                            output += f": <tg-spoiler>{link}</tg-spoiler>"
+                    else:
+                        # Обычный режим
+                        output += f": {link}"
                 else:
                     if lesson['subject'] != "——":
                         output += ": —"
-
                 output += "\n"
-
             output += "\n"
 
-        if not output:
-            return "Розклад не знайдено."
-
+        if not output: return "Розклад не знайдено."
         return output
     except Exception as e:
         raise e

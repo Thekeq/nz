@@ -37,11 +37,30 @@ async def admin_help(message: Message):
         "<b>📢 Маркетинг:</b>\n"
         "• <code>/bc ТЕКСТ</code> — Розсилка по всій базі.\n"
         "<i>Приклад: /bc Всім привіт! Оцінки оновились.</i>\n"
+        "• <code>/bc_guest ТЕКСТ</code> — Розсилка по ан-логін базі.\n"
+        "<i>Приклад: /bc_guest Всім привіт! Увійди в аккаунт.</i>\n"
+        "<code>/tiktok</code> — Режим тікток ( скриті посилання )\n"
         "• <code>/pick_winner</code> — Обрати рандомного переможця серед VIP (для розіграшів).\n\n"
 
         "<i>Натисни на команду, щоб скопіювати її в буфер.</i>"
     )
     await message.answer(text, parse_mode="HTML")
+
+
+TIKTOK_MODE = False
+
+
+@router.message(Command("tiktok"))
+async def toggle_tiktok(message: Message):
+    # Проверка на админа
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    global TIKTOK_MODE
+    TIKTOK_MODE = not TIKTOK_MODE
+
+    status = "🟢 ON (Ссылки скрыты)" if TIKTOK_MODE else "🔴 OFF (Ссылки открыты)"
+    await message.answer(f"🎬 <b>TikTok Mode:</b> {status}", parse_mode="HTML")
 
 
 @router.message(Command("gift_vip"))

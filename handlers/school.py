@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from quickchart import QuickChart
 
-from loader import db, fernet, SEMAPHORE
+from loader import db, fernet, SEMAPHORE, ADMIN_ID
 from utils import user_can_call, track_activity, process_referral_reward
 from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button
 from services.diarynz import get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework, \
@@ -40,12 +40,16 @@ async def get_diary(message: Message, state: FSMContext):
         try:
             login, enc_password, provider = db.get_user(user_id)
             password = fernet.decrypt(enc_password.encode()).decode()
+            is_tiktok = False
+            if message.from_user.id == ADMIN_ID:
+                from handlers.admin import TIKTOK_MODE
+                is_tiktok = TIKTOK_MODE
 
             async with SEMAPHORE:
                 if provider == "human":
                     schedule = await asyncio.to_thread(get_diary_schedule_human, login, password)
                 else:
-                    schedule = await asyncio.to_thread(get_diary_schedule, login, password)
+                    schedule = await asyncio.to_thread(get_diary_schedule, login, password, is_tiktok_mode=is_tiktok)
                 if schedule:  # или другой признак “ок”
                     db.set_creds_verified(user_id, 1)
                     # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
