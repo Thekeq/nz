@@ -487,6 +487,19 @@ class DataBase:
         with self.connection:
             return self.connection.execute("SELECT user_id FROM users").fetchall()
 
+    def get_non_logged_users(self):
+        """
+        Повертає список (user_id,) користувачів, яких немає в таблиці creds
+        (тобто вони натиснули /start, але не увійшли в акаунт).
+        """
+        with self.connection:
+            return self.connection.execute("""
+                SELECT u.user_id
+                FROM users u
+                LEFT JOIN creds c ON u.user_id = c.user_id
+                WHERE c.user_id IS NULL
+            """).fetchall()
+
     # ===== Activity (commands per day/week) =====
 
     def add_activity(self, user_id: int):

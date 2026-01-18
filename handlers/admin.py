@@ -240,6 +240,76 @@ async def broadcast(message: Message):
     await message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
 
 
+@router.message(Command("bc_guest"))
+async def broadcast_nologin(message: Message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+
+    # 1. Перевірка контенту (текст або підпис до фото)
+    content = message.text or message.caption
+
+    if not content:
+        await message.answer("⚠️ Повідомлення не містить тексту або підпису.")
+        return
+
+    args = content.split(" ", 1)
+    if len(args) < 2:
+        await message.answer(
+            "⚠️ Використання: <code>/bc_guest Текст</code> (можна з фото)\nЦе розсилка ТІЛЬКИ для тих, хто не увійшов.",
+            parse_mode="HTML")
+        return
+
+    text_to_send = args[1]
+    photo_id = message.photo[-1].file_id if message.photo else None
+
+    # Отримуємо список незалогінених
+    users = db.get_non_logged_users()
+    total_users = len(users)
+
+    if total_users == 0:
+        await message.answer("🤷‍♂️ Немає користувачів без логіну.")
+        return
+
+    await message.answer(
+        f"🚀 <b>Розсилка для «Гостей» ({total_users} чол.) почалась...</b>\nТип: {'Фото 📸' if photo_id else 'Текст 📝'}")
+
+    count, failed = 0, 0
+
+    for (uid,) in users:
+        # Для незалогінених ми завжди показуємо звичайну клавіатуру (build_main_kb),
+        # бо VIP без логіну навряд чи можливий/корисний.
+        kb = build_main_kb()
+
+        try:
+            if photo_id:
+                await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
+            else:
+                await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
+
+            count += 1
+            await asyncio.sleep(0.05)  # Пауза, щоб не спамити API
+
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+            try:
+                if photo_id:
+                    await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
+                else:
+                    await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
+                count += 1
+            except Exception:
+                failed += 1
+
+        except TelegramForbiddenError:
+            failed += 1  # Юзер заблокував бота
+
+        except Exception:
+            failed += 1
+
+    await message.answer(f"✅ Розсилка по незалогінених завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
+
+
 @router.message(Command("msg"))
 async def admin_msg(message: Message):
     user_id = message.from_user.id
@@ -250,7 +320,7 @@ async def admin_msg(message: Message):
         args = message.text.split(" ", 2)
         receiver_id = args[1]
         msg = args[2]
-        
+
         await bot.send_message(receiver_id, text=f"📩 Повідомлення від адміна:\n{msg}", parse_mode="HTML")
         await message.reply(f"✅ Надіслано повідомлення юзеру {receiver_id}\n"
                             f"Текст:\n{msg}")
