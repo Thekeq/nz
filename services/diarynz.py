@@ -71,10 +71,31 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
             msg = (j.get("loginform-password") or j.get("loginform-login") or ["Сталася невідома помилка"])[0]
             raise Exception(msg)
 
-        # 3. Отримуємо розклад
+        # 3. Отримуємо розклад (перший раз)
         scraper.post("https://nz.ua/login", data=data)
         diary_resp = scraper.get("https://nz.ua/schedule/diary")
         soup = BeautifulSoup(diary_resp.text, "html.parser")
+
+        # --- [НОВЕ] ЛОГІКА ВИБОРУ ПОТОЧНОГО СЕМЕСТРУ ---
+        semester_select = soup.find("select", {"id": "personalselectform-semester_id"})
+        if semester_select:
+            # Шукаємо option, де в тексті є "(поточний)"
+            current_option = semester_select.find("option", string=lambda text: text and "(поточний)" in text)
+
+            if current_option:
+                current_sem_id = current_option.get("value")
+
+                # Відправляємо запит на зміну семестру
+                scraper.post("https://nz.ua/site/semester-change", data={
+                    "_csrf": csrf,
+                    "semester_id": current_sem_id
+                }, headers=headers)
+
+                # ОБОВ'ЯЗКОВО: Перезавантажуємо сторінку розкладу з новим семестром
+                diary_resp = scraper.get("https://nz.ua/schedule/diary")
+                soup = BeautifulSoup(diary_resp.text, "html.parser")
+        # -----------------------------------------------
+
         diary_items = soup.select(".diary-item")
 
         if days is None:
@@ -82,13 +103,22 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
 
         schedule_by_day = {}
 
-        # --- Допоміжна функція ---
+        # --- Допоміжна функція для дати ---
         def extract_date_text(txt):
-            # Шукає цифри (1-2) + пробіл + букви (місяць)
             match = re.search(r'(\d{1,2}\s+[а-яіїє]+)', txt)
             return match.group(1) if match else ""
 
-        # -------------------------
+        # --- Допоміжна функція для посилань (якщо її немає в глобальній області) ---
+        def pick_best_link(box_element):
+            btn = box_element.select_one("a.btn.btn-success")
+            if btn: return btn.get("href")
+            link_in_text = box_element.select_one(".diary-lesson-text a")
+            if link_in_text:
+                href = link_in_text.get("href")
+                if href and "nz.ua" not in href: return href
+            return None
+
+        # ------------------------------------------------------------------------
 
         for item in diary_items:
             title_tag = item.select_one(".diary-item__title")
@@ -96,7 +126,6 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                 continue
             title_text = title_tag.get_text(strip=True).lower()
 
-            # Визначаємо базову назву
             if "сьогодні" in title_text or "сегодня" in title_text:
                 base_name = "сьогодні"
             elif "завтра" in title_text:
@@ -107,21 +136,16 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
             if base_name not in days:
                 continue
 
-            # --- ТВОЯ НОВА ЛОГІКА З ДАТОЮ ---
             date_part = extract_date_text(title_text)
-
-            # Формуємо фінальний ключ: "Завтра — 8 січня"
             if date_part:
                 display_name = f"{base_name.capitalize()} — {date_part}"
             else:
                 display_name = base_name.capitalize()
-            # -------------------------------
 
             schedule_by_day[display_name] = []
 
             for box in item.select(".diary-box"):
                 subject_tag = box.select_one(".diary-item__label")
-                meet_tag = box.select_one(".diary-lesson-text a")
                 time_tag = box.select_one(".diary-item__time")
 
                 if time_tag:
@@ -138,12 +162,9 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                     "meet": meet_link
                 })
 
-        # --- ВИПРАВЛЕНИЙ БЛОК ДЛЯ ЗАВТРА ---
+        # --- Блок для "Завтра" (пагінація) ---
         if "завтра" in days:
-            # ПЕРЕВІРКА: Шукаємо будь-який ключ, що починається на "Завтра" (наприклад "Завтра — 8 січня")
             has_tomorrow = any(k.lower().startswith("завтра") for k in schedule_by_day.keys())
-
-            # Якщо НЕ знайшли завтрашній день на цій сторінці — ліземо на наступну
             if not has_tomorrow:
                 next_link_tag = soup.select_one("a.pnl-next.diary-link")
                 href = next_link_tag.get("href") if next_link_tag else None
@@ -156,8 +177,6 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
 
                     if next_items:
                         item = next_items[0]
-
-                        # Тут теж треба витягнути дату, щоб було красиво
                         title_tag = item.select_one(".diary-item__title")
                         display_name_next = "Завтра"
 
@@ -168,30 +187,25 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
                                 display_name_next = f"Завтра — {date_part}"
 
                         schedule_by_day[display_name_next] = []
-
                         for box in item.select(".diary-box"):
                             subject_tag = box.select_one(".diary-item__label")
-                            meet_tag = box.select_one(".diary-lesson-text a")
                             time_tag = box.select_one(".diary-item__time")
-
                             if time_tag:
                                 time = " - ".join(t.strip() for t in time_tag.stripped_strings)
                             else:
                                 time = None
-
                             meet_link = pick_best_link(box)
                             subject = subject_tag.get_text(strip=True) if subject_tag else "——"
-
                             schedule_by_day[display_name_next].append({
                                 "subject": subject,
                                 "time": time,
                                 "meet": meet_link
                             })
 
-        # Формування тексту
+        # --- ФОРМУВАННЯ ТЕКСТУ (Твоя стара логіка) ---
         output = ""
         for day_header, lessons in schedule_by_day.items():
-            output += f"📅 <b>{day_header}</b>\n"  # Ключ вже містить дату
+            output += f"📅 <b>{day_header}</b>\n"
 
             last_index = 0
             for idx, lesson in enumerate(lessons, start=1):
@@ -209,6 +223,7 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None)
 
                 output += lesson["subject"]
 
+                # ТОЧНО як у тебе було:
                 if lesson['meet']:
                     output += f": {lesson['meet']}"
                 else:
