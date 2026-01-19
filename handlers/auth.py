@@ -95,8 +95,29 @@ async def process_password(message: Message, state: FSMContext):
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)
     except Exception as e:
-        print(e)
-        await message.answer("❌ Сталася помилка. Спробуйте пізніше.", reply_markup=kb_retry)
+        error_text = str(e)  # Перетворюємо помилку в рядок
+
+        # Перевірка на неправильний пароль Human
+        if "User not found" in error_text or "password wrong" in error_text:
+            await message.answer(
+                "⛔️ <b>Невірний логін або пароль!</b>\n\n"
+                "Human відхилив вхід. Перевірте пошту та пароль і спробуйте ще раз.",
+                parse_mode="HTML",
+                reply_markup=kb_retry
+            )
+
+        # Перевірка на інші відомі помилки (наприклад, сервер Human лежить)
+        elif "502" in error_text or "504" in error_text or "Server is busy" in error_text:
+            await message.answer(
+                "😵 <b>Сайт Human зараз перевантажений.</b>\n"
+                "Спробуйте через 5 хвилин.",
+                parse_mode="HTML",
+                reply_markup=kb_retry
+            )
+
+        # Всі інші невідомі помилки
+        else:
+            await message.answer("❌ Сталася невідома помилка. Спробуйте пізніше.", reply_markup=kb_retry)
 
     await state.clear()
 
@@ -115,9 +136,10 @@ async def logout(message: Message):
 async def retry_login(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
 
-    await logout(callback.message)
+    if db.has_credentials(user_id):
+        db.delete_user(user_id)
 
-    await callback.message.answer("🔄 Спробуємо ще раз!\nВведіть свій логін:", reply_markup=ReplyKeyboardRemove())
-    await state.set_state(AuthStates.login)
+    await state.set_state(AuthStates.provider)
+    await callback.message.answer("🔄 Спробуємо ще раз!\nОберіть щоденник:", reply_markup=kb_provider)
 
     await callback.answer()
