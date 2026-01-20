@@ -61,11 +61,11 @@ async def get_diary(message: Message, state: FSMContext):
                 is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
                 if is_vip:
                     keyboard = await keyboard_diary(provider)
-                    await message.reply("✅ Вот ваш розклад:", reply_markup=build_vip_kb())
+                    await message.reply("✅ Ось ваш розклад:", reply_markup=build_vip_kb())
                     await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=keyboard)
                 else:
                     keyboard = await keyboard_diary(provider)
-                    await message.reply("✅ Вот ваш розклад:", reply_markup=build_main_kb())
+                    await message.reply("✅ Ось ваш розклад:", reply_markup=build_main_kb())
                     await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=keyboard)
             else:
                 await message.answer(f"{schedule}")

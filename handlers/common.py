@@ -223,7 +223,7 @@ async def support_start(message: Message, state: FSMContext):
 async def support_send(message: Message, state: FSMContext):
     user = message.from_user
     if not message.text:
-        await message.answer("❌ Пароль потрібно вводити текстом.")
+        await message.answer("❌ Повідомлення потрібно вводити текстом.")
         return
     text = message.text.strip()
     msg = (
