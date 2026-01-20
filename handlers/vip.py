@@ -6,6 +6,7 @@ import re
 import gc
 from html import escape
 
+from typing import Union
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, LabeledPrice, PreCheckoutQuery, BufferedInputFile, \
     InlineQueryResultCachedPhoto, InlineQuery
@@ -27,8 +28,17 @@ router = Router()
 
 @router.message(Command('vip'))
 @router.message(F.text == "⭐️ Free VIP")
-async def vip_func(message: Message):
-    user_id = message.from_user.id
+@router.callback_query(F.data == "vip_menu")
+async def vip_func(event: Union[Message, CallbackQuery]):
+    user_id = event.from_user.id
+
+    # Логіка визначення об'єкта повідомлення
+    if isinstance(event, CallbackQuery):
+        message_object = event.message
+        await event.answer()  # Прибрати анімацію завантаження
+    else:
+        message_object = event
+
     track_activity(user_id)
     # Дозволяємо відкривати VIP-меню навіть без кредів (оплата не залежить від NZ)
     db.ensure_user(user_id)
@@ -41,7 +51,7 @@ async def vip_func(message: Message):
         date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y")
         if expires == 0:
             date_str = "НАЗАВЖДИ :)"
-        await message.answer(
+        await message_object.answer(
             f"⭐️ Ви маєте VIP до <b>{date_str}</b>\n\n"
             f"🏆 /leaderboard - <b>Розіграш 100 ⭐️ кожні 2 тижні</b>\n"
             f"✨ /ai — <b>Використання ШІ</b>\n"
@@ -57,7 +67,7 @@ async def vip_func(message: Message):
             parse_mode="HTML", disable_web_page_preview=True
         )
     else:
-        await message.answer(
+        await message_object.answer(
             "🎁 Безкоштовний VIP: 3 друга → 5 днів VIP\n"
             f"Ваше реферальне посилання: https://t.me/nzdiary_bot?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
@@ -83,7 +93,7 @@ async def vip_func(message: Message):
 
         prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=75)]  # сума в XTR-центах
 
-        await message.answer_invoice(
+        await message_object.answer_invoice(
             title="VIP Доступ",
             description="Миттєвий доступ до всіх перелічених функцій на 1 місяць 🚀",
             payload=f"vip_{user_id}_{int(datetime.datetime.now().timestamp())}",
@@ -477,48 +487,54 @@ async def inline_share_handler(query: InlineQuery):
 
 
 @router.message(Command("leaderboard"))
-async def leaderboard_cmd(message: Message):
-    # 1. Отримуємо статистику (всі VIP + їхні запрошення за 2 тижні)
+@router.callback_query(F.data == "leaderboard")
+async def leaderboard_cmd(event: Union[Message, CallbackQuery]):
+    # 1. Зберігаємо ID того, хто викликав команду (caller_id)
+    caller_id = event.from_user.id
+
+    if isinstance(event, CallbackQuery):
+        message_object = event.message
+        await event.answer()
+    else:
+        message_object = event
+
     stats = db.get_vip_referral_stats(days=14)
 
     if not stats:
-        await message.answer("😔 Поки що немає активних VIP-учасників.")
+        await message_object.answer("😔 Поки що немає активних VIP-учасників.")
         return
 
-    # 2. Беремо топ-10
     top_10 = stats[:10]
 
     text = "🏆 <b>Топ-10 VIP Амбасадорів (за 2 тижні)</b>\n\n"
     text += "<i><b>🎁 Кожні 2 тижні серед усіх VIP користувачів проводиться розіграш подарунка за 100 ⭐️</b></i>\n"
     text += "<i>Запрошуй друзів, щоб піднятися в топі та отримати більше шансів у розіграші! (Кожен друг +1 квиток до розіграшу)</i>\n\n"
 
-    # 3. Формуємо список
-    for i, (user_id, count) in enumerate(top_10, 1):
+    # --- ВИПРАВЛЕННЯ ТУТ ---
+    # Використовуємо top_user_id замість user_id, щоб не зламати логіку
+    for i, (top_user_id, count) in enumerate(top_10, 1):
         try:
-            # Пробуємо отримати ім'я користувача від Telegram
-            chat = await message.bot.get_chat(user_id)
+            chat = await message_object.bot.get_chat(top_user_id)
             name = chat.first_name or "Користувач"
-            # Екрануємо ім'я, щоб не зламало HTML (наприклад, якщо ім'я "<Ivan>")
             name = escape(name)
         except Exception:
-            name = f"ID {str(user_id)[:4]}..."
+            name = f"ID {str(top_user_id)[:4]}..."
 
-        # Медальки для перших трьох місць
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-
         text += f"{medal} <b>{name}</b> — {count} друзів 🎟\n"
 
-    # 4. Показуємо місце самого користувача (якщо він VIP)
-    user_id = message.from_user.id
-    user_rank = next((idx for idx, (uid, _) in enumerate(stats) if uid == user_id), None)
+    # 4. Показуємо місце користувача (використовуємо caller_id)
+    # Шукаємо caller_id у списку stats
+    user_rank = next((idx for idx, (uid, _) in enumerate(stats) if uid == caller_id), None)
 
     if user_rank is not None:
         my_count = stats[user_rank][1]
         text += f"\n👤 <b>Твоє місце:</b> {user_rank + 1} ({my_count} друзів)"
     else:
+        # Перевіряємо, чи є у нього взагалі VIP (опціонально, але текст каже "потрібен VIP")
         text += "\n👤 Ти не береш участі в рейтингу (потрібен VIP статус)."
 
-    await message.answer(text, parse_mode="HTML")
+    await message_object.answer(text, parse_mode="HTML")
 
 
 @router.message(Command("notify_grades"))

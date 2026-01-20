@@ -1,13 +1,17 @@
 import asyncio
 import random
 import time
+
+from aiogram.fsm.context import FSMContext
 from quickchart import QuickChart
 import datetime
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import Command
-from aiogram.types import Message, InputMediaPhoto
+from aiogram.types import Message, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+
+from handlers.vip import leaderboard_cmd
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
 
@@ -327,6 +331,76 @@ async def broadcast_nologin(message: Message):
             failed += 1
 
     await message.answer(f"✅ Розсилка по незалогінених завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
+
+
+@router.message(Command("bc_stars"))
+async def broadcast_stars_smart(message: Message):
+    # Перевірка адміна
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    # --- ВАРІАНТ 1: ДЛЯ ЗВИЧАЙНИХ (ПРОДАЮЧИЙ) ---
+    text_no_vip = (
+        "⭐️ <b>РОЗІГРАШ 100 ЗІРОК</b>\n\n"
+        "Вже в цей понеділок (26.01) ми визначимо переможця.\n\n"
+        "⚠️ <b>Важливе нагадування:</b>\n"
+        "У розіграші беруть участь <b>ТІЛЬКИ</b> користувачі з VIP-підпискою.\n"
+        "Якщо у тебе немає VIP — ти просто глядач.\n\n"
+        "🎫 <b>Як збільшити шанси?</b>\n"
+        "Твій рейтинг у /leaderboard = твої додаткові квитки.\n"
+        "<i>Вхідний квиток у гру коштує копійки 👇</i>"
+    )
+    kb_no_vip = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 КУПИТИ VIP (ВЗЯТИ УЧАСТЬ)", callback_data="vip_menu")]
+    ])
+
+    # --- ВАРІАНТ 2: ДЛЯ VIP (МОТИВУЮЧИЙ) ---
+    text_is_vip = (
+        "⭐️ <b>РОЗІГРАШ 100 ЗІРОК</b> ✅\n\n"
+        "Вже в цей понеділок (26.01) ми визначимо переможця.\n"
+        "Так як ви маєте <b>VIP-статус</b> — ви автоматично берете участь! 🥳\n\n"
+        "🎫 <b>Хочеш більше шансів на перемогу?</b>\n"
+        "Твій рейтинг у /leaderboard = твої додаткові квитки.\n"
+        "Запрошуй друзів: <b>1 друг = +1 лотерейний квиток.</b>"
+    )
+    # Кнопка веде на рефералку або топ, щоб він почав інвайтити
+    kb_is_vip = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏆 Піднятися в топі", callback_data="leaderboard")]
+    ])
+
+    await message.answer("🚀 <b>Запуск сегментованої розсилки...</b>")
+
+    users = db.get_all_users()
+    count_vip = 0
+    count_novip = 0
+    failed = 0
+
+    for (uid,) in users:
+        try:
+            # 1. Перевіряємо статус (Твій код)
+            vip_flag, expires = db.get_vip_status(uid)
+            now_ts = int(time.time())
+            is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+
+            # 2. Відправляємо відповідний текст
+            if is_vip:
+                await bot.send_message(uid, text=text_is_vip, parse_mode="HTML", reply_markup=kb_is_vip)
+                count_vip += 1
+            else:
+                await bot.send_message(uid, text=text_no_vip, parse_mode="HTML", reply_markup=kb_no_vip)
+                count_novip += 1
+
+            await asyncio.sleep(0.05)  # Анти-спам
+
+        except Exception:
+            failed += 1
+
+    await message.answer(
+        f"✅ <b>Розсилка завершена!</b>\n\n"
+        f"💎 VIP отримали: {count_vip}\n"
+        f"👤 Звичайні отримали: {count_novip}\n"
+        f"❌ Не дійшло: {failed}"
+    )
 
 
 @router.message(Command("msg"))
