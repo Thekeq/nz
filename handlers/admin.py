@@ -421,6 +421,36 @@ async def admin_msg(message: Message):
         await message.reply(f"Помилка: {e}")
 
 
+@router.message(Command("who"))
+async def pick_winner_cmd(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return  # Тільки для адміна
+
+    args = message.text.split(" ", 1)
+    who_id = args[1]
+
+    try:
+        # Отримуємо дані переможця
+        chat = await message.bot.get_chat(who_id)
+        username = f"@{chat.username}" if chat.username else "немає юзернейму"
+        name = chat.first_name or "Користувач"
+    except Exception:
+        username = "невідомо"
+        name = "Користувач"
+
+    # 4. Формуємо повідомлення для адміна з посиланням на профіль
+    text = (
+        f"🎉 <b>Інформація про {who_id}!</b>\n\n"
+        f"👤 <b>Ім'я:</b> {name}\n"
+        f"🆔 <b>ID:</b> <code>{who_id}</code>\n"
+        f"🔗 <b>Username:</b> {username}\n"
+        f"🎟 <b>Vip:</b> {db.get_vip_status(who_id)}\n"
+        f"👉 <a href='tg://user?id={who_id}'>ВІДКРИТИ ПРОФІЛЬ ТА ПОДАРУВАТИ</a>\n\n"
+    )
+
+    await message.answer(text, parse_mode="HTML")
+
+
 # --- ХЕЛПЕРИ (Винеси їх окремо, або залиш над хендлером) ---
 
 def _get_activity_chart(stats, days):
