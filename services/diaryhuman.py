@@ -96,7 +96,7 @@ def _human_login(email: str, password: str) -> requests.Session:
         "user-agent": "Mozilla/5.0",
     })
 
-    r = s.post(f"{API}/auth", json={"email": email, "password": password}, timeout=25)
+    r = s.post(f"{API}/auth", json={"email": email, "password": password}, timeout=5)
     if r.status_code != 200:
         # иногда API отдаёт текст/JSON с ошибкой — покажем аккуратно
         try:
@@ -113,7 +113,7 @@ def _get_institution_user_id(s: requests.Session) -> int:
     r = s.get(
         f"{API}/user/institutions",
         params={"expand": "user,userTariff.tariffPlan", "page": 1, "_limit": 30},
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     j = r.json()
@@ -143,7 +143,7 @@ def _fetch_calendar(s: requests.Session, institution_user_id: int, start_ts: int
             "expand": "group.subject,webConference,classroom",
             "_limit": 987654321,
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return r.json()
@@ -385,7 +385,7 @@ def _fetch_homework(s: requests.Session, institution_user_id: int, filter_name: 
             "filter": filter_name,  # receivedWeek / receivedToday / receivedTomorrow
             "_limit": 987654321,
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
@@ -505,7 +505,7 @@ def _fetch_news(s: requests.Session, institution_user_id: int, limit: int = 10, 
             "page": page,
             "expand": "homeTask.type,homeTask.theme,lessonTask.theme,group.subject,comments,lessonTask.contentWithoutMongo",
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
@@ -657,7 +657,7 @@ def _get_institution_meta(s: requests.Session) -> tuple[int, int]:
     r = s.get(
         f"{API}/user/institutions",
         params={"expand": "user,userTariff.tariffPlan,institution", "page": 1, "_limit": 30},
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     j = r.json()
@@ -733,7 +733,7 @@ def _fetch_assessments_average(
             "_limit": 50,
             "institution_id": institution_id,
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
@@ -758,7 +758,7 @@ def _fetch_assessments_performance(
             "_limit": 50,
             "institution_id": institution_id,
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
@@ -783,7 +783,7 @@ def _fetch_assessments_average_dynamic(
             "_limit": 50,
             "institution_id": institution_id,
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
@@ -804,7 +804,7 @@ def _fetch_assessments_detailed(s: requests.Session, inst_uid: int, inst_id: int
             "institution_id": inst_id,
             "expand": "theme,group.subject",
         },
-        timeout=25,
+        timeout=5,
     )
     r.raise_for_status()
     return _json_or_xml(r)
