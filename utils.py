@@ -54,13 +54,16 @@ async def process_referral_reward(user_id: int):
 
     count = db.add_invite_and_get(referrer_id, 1)
 
-    if count >= 3 and db.try_consume_invites(referrer_id, 3):
-        # 1. Додаємо 5 днів VIP
-        db.set_vip(referrer_id, 5)
+    need_invite = 1
+
+    if count >= need_invite and db.try_consume_invites(referrer_id, need_invite):
+        # 1. Додаємо days_to_add днів VIP
+        days_to_add = 3
+        db.set_vip(referrer_id, days_to_add)
 
         # 2. Нараховуємо токени
         MAX_TOKENS = 1000000
-        REWARD = 150000
+        REWARD = 50000
 
         current_tokens = db.get_tokens(referrer_id)
         new_balance = min(current_tokens + REWARD, MAX_TOKENS)
@@ -70,9 +73,9 @@ async def process_referral_reward(user_id: int):
         try:
             await bot.send_message(
                 referrer_id,
-                f"🎉 <b>Вітаємо! Ви запросили 3 друзів!</b>\n\n"
-                f"⭐️ VIP продовжено на <b>5 днів</b>\n"
-                f"💎 Нараховано <b>150,000</b> ШІ токенів\n"
+                f"🎉 <b>Вітаємо! Твій друг приєднався!</b>\n\n"
+                f"⭐️ VIP продовжено на <b>{days_to_add} дні(в)</b>\n"
+                f"💎 Нараховано <b>{REWARD}</b> ШІ токенів\n"
                 f"💰 Ваш баланс: <b>{compact_num(new_balance)}/{compact_num(MAX_TOKENS)}</b> токенів",
                 parse_mode="HTML"
             )
@@ -82,7 +85,7 @@ async def process_referral_reward(user_id: int):
         try:
             await bot.send_message(
                 referrer_id,
-                f"Ви запросили друга ✅\nПрогрес: {count}/3 до безкоштовного ВІП ⭐️"
+                f"Ви запросили друга ✅\nПрогрес: {count}/{need_invite} до безкоштовного ВІП ⭐️"
             )
         except Exception:
             pass

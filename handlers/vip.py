@@ -61,14 +61,14 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"⏰ /notify — <b>Нагадування перед уроками</b>\n"
             f"🔔 /notify_grades — <b>Сповіщення о нових оцінках (nz)</b>\n"
             f"⚡ <b>Пріоритетні запити та підтримка</b>\n\n"
-            f"<blockquote>🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 5 днів за кожних 3 друзів\n"
+            f"<blockquote>🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 3 дні за кожного друга!\n"
             f"Ваше реферальне посилання:\n"
             f"https://t.me/nzdiary_bot?start={user_id}</blockquote>", reply_markup=share_kb(user_id),
             parse_mode="HTML", disable_web_page_preview=True
         )
     else:
         await message_object.answer(
-            "🎁 Безкоштовний VIP: 3 друга → 5 днів VIP\n"
+            "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP\n"
             f"Ваше реферальне посилання: https://t.me/nzdiary_bot?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
             f"🏆 Розіграш 100 ⭐️ кожні 2 тижні\n"
@@ -376,7 +376,7 @@ async def send_wrapped(message: Message, state: FSMContext):
             sent_msg = await message.answer_photo(
                 photo=BufferedInputFile(photo_bio.read(), filename="wrapped.png"),
                 caption="📸 Твій звіт за тиждень! (Default Style)\n"
-                        "<i><a href='https://nz.ua/schedule/grades-statement'>Дані взяті з nz.ua</a></i>\n\n"
+                        "<i>Дані взяті з nz.ua або human.ua</i>\n\n"
                         "Хочеш кастомні стилі (Matrix, Gold)? Придбай /vip",
                 parse_mode="HTML",
                 reply_markup=share_kb  # <--- Додали кнопку сюди
@@ -438,7 +438,7 @@ async def generate_vip_wrapped(callback: CallbackQuery, state: FSMContext):
         sent_msg = await callback.message.answer_photo(
             photo=BufferedInputFile(photo_bio.read(), filename="wrapped.png"),
             caption=f"📸 Твій звіт у стилі <b>{selected_style.capitalize()}</b>! 🔥\n"
-                    f"<i><a href='https://nz.ua/schedule/grades-statement'>Дані взяті з nz.ua</a></i>",
+                    f"<i>Дані взяті з nz.ua або human.ua</i>\n\n",
             parse_mode="HTML",
             reply_markup=share_kb  # <--- Додаємо клавіатуру
         )
