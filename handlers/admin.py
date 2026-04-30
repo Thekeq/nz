@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import time
 
 from aiogram.fsm.context import FSMContext
@@ -14,6 +15,7 @@ from aiogram.types import Message, InputMediaPhoto, InlineKeyboardMarkup, Inline
 from handlers.vip import leaderboard_cmd
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
+from services.finder import getsession, getinfo
 
 router = Router()
 
@@ -626,3 +628,17 @@ async def stats(message: Message):
         InputMediaPhoto(media=activity_url)
     ]
     await message.answer_media_group(media)
+
+
+# --- NaurokFinder личная фича найденная вручную ---
+@router.message(F.text.startswith("https://naurok.com.ua/test"))
+async def test(message: Message):
+    url = message.text
+    if url.startswith('https://naurok.com.ua/test/testing/'):
+        try:
+            url = re.sub(r'/test/testing/', '/test/realtime-client/', url)
+        except Exception as e:
+            print(e)
+    data = getsession(url)
+    info = getinfo(data)
+    await message.answer(f"Назва тесту: <i>{info}</i>", parse_mode="HTML")
