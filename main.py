@@ -7,7 +7,7 @@ from services.background import check_lessons, check_grades, memory_cleaner_task
 # Налаштування логування
 logging.basicConfig(level=logging.WARNING)
 
-    
+
 async def main():
     print("🚀 Bot starting...")
 
@@ -24,7 +24,7 @@ async def main():
     asyncio.create_task(memory_cleaner_task())
 
     # Запуск бота
-    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
 
 

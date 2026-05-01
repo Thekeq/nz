@@ -98,7 +98,7 @@ def share_kb(user_id: int):
 
 def payment_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"Отримати VIP за 75 ⭐️", pay=True)
+    builder.button(text=f"Отримати VIP за 50 ⭐️", pay=True)
     return builder.as_markup()
 
 
