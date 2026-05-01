@@ -53,7 +53,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             date_str = "НАЗАВЖДИ :)"
         await message_object.answer(
             f"⭐️ Ви маєте VIP до <b>{date_str}</b>\n\n"
-            f"🏆 /leaderboard - <b>Розіграш 100 ⭐️ кожні 2 тижні</b>\n"
+            f"🏆 /leaderboard - <b>Топ VIP Амбасадорів</b>\n"
             f"✨ /ai — <b>Використання ШІ</b>\n"
             f"👕 /wrapped — <b>Ексклюзивні теми (Matrix, Gold, Ocean)</b>\n"
             f"📅 /diary_days (/diary) — <b>Перегляд розкладу по дням</b>\n"
@@ -71,7 +71,6 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP\n"
             f"Ваше реферальне посилання: https://t.me/nzdiary_bot?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
-            f"🏆 Розіграш 100 ⭐️ кожні 2 тижні\n"
             f"🎨 Ексклюзивні теми (Matrix, Gold, Ocean)\n"
             f"✨ Використання ШІ-асистента\n"
             f"📅 Перегляд розкладу по дням\n"
@@ -80,9 +79,9 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"📊 Розширений рейтинг та статистика, діаграма-павутинка\n"
             f"⚡ Пріоритетні запити та швидка підтримка\n\n"
             f"💎 <b>Оберіть спосіб оплати VIP:</b>\n"
-            f"<blockquote>⭐️ <b>Telegram Stars (75 ⭐️)</b>\n"
+            f"<blockquote>⭐️ <b>Telegram Stars (50 ⭐️)</b>\n"
             f"Натисніть кнопку нижче. Активація миттєва.</blockquote>\n\n"
-            f"🐈 <b>Monobank (Банка) 75 грн</b>\n"
+            f"🐈 <b>Monobank (Банка) 50 грн</b>\n"
             f"<blockquote>Реквізити банки: <code>4874 1000 2294 2034</code>\n"
             f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n\n"
             f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
@@ -91,7 +90,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             disable_web_page_preview=True
         )
 
-        prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=75)]  # сума в XTR-центах
+        prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=50)]  # сума в XTR-центах
 
         await message_object.answer_invoice(
             title="VIP Доступ",
@@ -507,8 +506,6 @@ async def leaderboard_cmd(event: Union[Message, CallbackQuery]):
     top_10 = stats[:10]
 
     text = "🏆 <b>Топ-10 VIP Амбасадорів (за 2 тижні)</b>\n\n"
-    text += "<i><b>🎁 Кожні 2 тижні серед усіх VIP користувачів проводиться розіграш подарунка за 100 ⭐️</b></i>\n"
-    text += "<i>Запрошуй друзів, щоб піднятися в топі та отримати більше шансів у розіграші! (Кожен друг +1 квиток до розіграшу)</i>\n\n"
 
     # --- ВИПРАВЛЕННЯ ТУТ ---
     # Використовуємо top_user_id замість user_id, щоб не зламати логіку
