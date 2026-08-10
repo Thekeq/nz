@@ -15,6 +15,8 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 
+from services.digest import homework_hash
+
 logger = logging.getLogger(__name__)
 _SESSION_LOCKS: dict[int, threading.RLock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
@@ -654,6 +656,50 @@ def extract_hw_link(box) -> str | None:
     return href
 
 
+def _collect_homework(soup: BeautifulSoup, days: list[str]) -> dict[str, list[dict]]:
+    """Парсить ДЗ зі сторінки щоденника у {день: [{subject, hw, link}, ...]}."""
+    homework_by_day: dict[str, list[dict]] = {}
+
+    for item in soup.select(".diary-item"):
+        title_tag = item.select_one(".diary-item__title")
+        if not title_tag:
+            continue
+
+        title_text = title_tag.get_text(" ", strip=True).lower()
+
+        if "сьогодні" in title_text or "сегодня" in title_text:
+            day_name = "сьогодні"
+        elif "завтра" in title_text:
+            day_name = "завтра"
+        else:
+            day_name = title_text.split(",")[0].strip()
+
+        if day_name not in days:
+            continue
+
+        lessons = []
+
+        for box in item.select(".diary-box"):
+            subject_tag = box.select_one(".diary-item__label")
+            subject = subject_tag.get_text(strip=True) if subject_tag else "——"
+
+            hw_link = extract_hw_link(box)
+            hw = extract_homework(box)
+            if not hw:
+                continue
+
+            lessons.append({
+                "subject": subject,
+                "hw": hw,
+                "link": hw_link
+            })
+
+        if lessons:
+            homework_by_day[day_name] = lessons
+
+    return homework_by_day
+
+
 @_dedupe_call
 @_with_user_session_lock
 def get_diary_homework(
@@ -673,49 +719,11 @@ def get_diary_homework(
         soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
         if soup is None:
             return "Не удалось получить CSRF токен."
-        diary_items = soup.select(".diary-item")
 
         if days is None:
             days = ["сьогодні"]
 
-        homework_by_day: dict[str, list[dict]] = {}
-
-        for item in diary_items:
-            title_tag = item.select_one(".diary-item__title")
-            if not title_tag:
-                continue
-
-            title_text = title_tag.get_text(" ", strip=True).lower()
-
-            if "сьогодні" in title_text or "сегодня" in title_text:
-                day_name = "сьогодні"
-            elif "завтра" in title_text:
-                day_name = "завтра"
-            else:
-                day_name = title_text.split(",")[0].strip()
-
-            if day_name not in days:
-                continue
-
-            lessons = []
-
-            for box in item.select(".diary-box"):
-                subject_tag = box.select_one(".diary-item__label")
-                subject = subject_tag.get_text(strip=True) if subject_tag else "——"
-
-                hw_link = extract_hw_link(box)
-                hw = extract_homework(box)
-                if not hw:
-                    continue
-
-                lessons.append({
-                    "subject": subject,
-                    "hw": hw,
-                    "link": hw_link
-                })
-
-            if lessons:
-                homework_by_day[day_name] = lessons
+        homework_by_day = _collect_homework(soup, days)
 
         # ---- форматирование для Telegram (HTML) ----
         if not homework_by_day:
@@ -943,6 +951,52 @@ def get_grade_events(
 
             out.append({"name": name, "text": text, "hash": h})
 
+        return out
+    except Exception as e:
+        raise e
+    finally:
+        _release_scraper(user_id, scraper, keep=user_id is not None)
+
+
+@_dedupe_call
+@_with_user_session_lock
+def get_homework_events(
+        login: str,
+        password: str,
+        days: list[str] | None = None,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> list[dict]:
+    """
+    ДЗ у вигляді подій з хешами — для сповіщень про НОВЕ ДЗ.
+    [{'day','subject','hw','link','hash'}, ...]
+    Хеш не залежить від дня-мітки («сьогодні» стає «завтра» наступного дня),
+    інакше те саме ДЗ прилітало б двічі.
+    """
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
+    try:
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url="https://nz.ua/schedule/diary"
+        )
+        soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
+        if soup is None:
+            return []
+
+        if days is None:
+            days = ["сьогодні", "завтра"]
+
+        out = []
+        for day_name, lessons in _collect_homework(soup, days).items():
+            for lesson in lessons:
+                out.append({
+                    "day": day_name,
+                    "subject": lesson["subject"],
+                    "hw": lesson["hw"],
+                    "link": lesson.get("link"),
+                    "hash": homework_hash(lesson["subject"], lesson["hw"]),
+                })
         return out
     except Exception as e:
         raise e

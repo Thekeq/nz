@@ -5,7 +5,8 @@ from loader import dp, bot, LOG_LEVEL, db, ADMIN_ID
 from handlers import auth, school, vip, admin, common
 from middlewares import MetricsMiddleware
 from services.background import (
-    check_lessons, check_grades, memory_cleaner_task, daily_backup_task, vip_expiry_task,
+    check_lessons, check_grades, check_homework, memory_cleaner_task,
+    daily_backup_task, vip_expiry_task, morning_digest_task,
 )
 
 # Налаштування логування
@@ -56,6 +57,8 @@ async def main():
     # Запуск фонових задач (із перезапуском при падінні)
     asyncio.create_task(supervised("check_lessons", check_lessons))
     asyncio.create_task(supervised("check_grades", check_grades))
+    asyncio.create_task(supervised("check_homework", check_homework))
+    asyncio.create_task(supervised("morning_digest", morning_digest_task))
     asyncio.create_task(supervised("memory_cleaner", memory_cleaner_task))
     asyncio.create_task(supervised("daily_backup", daily_backup_task))
     asyncio.create_task(supervised("vip_expiry", vip_expiry_task))

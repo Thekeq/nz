@@ -9,13 +9,13 @@ from quickchart import QuickChart
 import datetime
 
 from aiogram import Router, F
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.types import Message, InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 from handlers.vip import leaderboard_cmd
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
+from utils import safe_send
 from services.finder import getsession, getinfo
 
 router = Router()
@@ -34,7 +34,9 @@ async def admin_help(message: Message):
 
         "<b>📊 Аналітика та Графіки:</b>\n"
         "• <code>/stat days</code> — Показати статистику та графіки за N днів (макс. 90).\n"
-        "<i>(Якщо не вказати дні, за замовчуванням 7)</i>\n\n"
+        "<i>(Якщо не вказати дні, за замовчуванням 7)</i>\n"
+        "• <code>/who user_id</code> — Інфо про юзера та його VIP.\n"
+        "• <code>/test_digest [user_id]</code> — Прогнати ранковий дайджест зараз.\n\n"
 
         "<b>🎁 Управління юзерами:</b>\n"
         "• <code>/gift_vip user_id days</code> — Видати VIP.\n"
@@ -199,6 +201,39 @@ async def pick_winner_cmd(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
+@router.message(Command("test_digest"))
+async def test_digest(message: Message):
+    """Прогнати ранковий дайджест зараз для себе або вказаного user_id.
+    Потрібно, бо о 7:30 живої перевірки не буде."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    from services.background import send_digest_to
+
+    parts = message.text.split()
+    target = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else message.from_user.id
+
+    login, enc_password, provider = db.get_user(target)
+    if not login or not enc_password:
+        await message.answer(f"❌ У {target} немає збережених кредів — дайджест неможливий.")
+        return
+
+    vip_flag, expires = db.get_vip_status(target)
+    is_vip = bool(vip_flag) and (expires == 0 or expires > time.time())
+
+    await message.answer(
+        f"🧪 Прогоняю дайджест для <code>{target}</code> (provider={provider}, vip={is_vip})…",
+        parse_mode="HTML"
+    )
+    sent = await send_digest_to(target, login, enc_password, provider, is_vip)
+    await message.answer(
+        "✅ Дайджест надіслано." if sent
+        else "⚪️ Не надіслано: на сьогодні немає уроків або скрап не дав розкладу.\n"
+             "<i>Це нормальна поведінка для вихідних/канікул.</i>",
+        parse_mode="HTML"
+    )
+
+
 @router.message(Command("bc"))
 async def broadcast(message: Message):
     user_id = message.from_user.id
@@ -234,35 +269,15 @@ async def broadcast(message: Message):
         is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
         kb = build_vip_kb() if is_vip else build_main_kb()
 
-        try:
-            if photo_id:
-                # Якщо це фото — надсилаємо фото з підписом
-                await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
-            else:
-                # Якщо просто текст — надсилаємо текст
-                await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
-
+        ok = await safe_send(
+            uid, text_to_send, photo=photo_id,
+            parse_mode="HTML", reply_markup=kb
+        )
+        if ok:
             count += 1
-            await asyncio.sleep(0.05)  # Швидка пауза
-
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after + 1)
-            try:
-                # Повторна спроба
-                if photo_id:
-                    await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
-                else:
-                    await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
-                count += 1
-            except Exception:
-                failed += 1
-
-        except TelegramForbiddenError:
-            failed += 1  # Юзер заблокував бота
-
-        except Exception:
-            logger.exception("Broadcast failed for user_id=%s", uid)
+        else:
             failed += 1
+        await asyncio.sleep(0.05)  # Швидка пауза
 
     await message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
 
@@ -306,33 +321,15 @@ async def broadcast_nologin(message: Message):
     for (uid,) in users:
         # Для незалогінених ми завжди показуємо звичайну клавіатуру (build_main_kb),
         # бо VIP без логіну навряд чи можливий/корисний.
-        kb = build_main_kb()
-
-        try:
-            if photo_id:
-                await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
-            else:
-                await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
-
+        ok = await safe_send(
+            uid, text_to_send, photo=photo_id,
+            parse_mode="HTML", reply_markup=build_main_kb()
+        )
+        if ok:
             count += 1
-            await asyncio.sleep(0.05)  # Пауза, щоб не спамити API
-
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after + 1)
-            try:
-                if photo_id:
-                    await bot.send_photo(uid, photo=photo_id, caption=text_to_send, parse_mode="HTML", reply_markup=kb)
-                else:
-                    await bot.send_message(uid, text=text_to_send, parse_mode="HTML", reply_markup=kb)
-                count += 1
-            except Exception:
-                failed += 1
-
-        except TelegramForbiddenError:
-            failed += 1  # Юзер заблокував бота
-
-        except Exception:
+        else:
             failed += 1
+        await asyncio.sleep(0.05)  # Пауза, щоб не спамити API
 
     await message.answer(f"✅ Розсилка по незалогінених завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
 
@@ -380,24 +377,22 @@ async def broadcast_stars_smart(message: Message):
     failed = 0
 
     for (uid,) in users:
-        try:
-            # 1. Перевіряємо статус (Твій код)
-            vip_flag, expires = db.get_vip_status(uid)
-            now_ts = int(time.time())
-            is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+        # 1. Перевіряємо статус (Твій код)
+        vip_flag, expires = db.get_vip_status(uid)
+        now_ts = int(time.time())
+        is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
-            # 2. Відправляємо відповідний текст
-            if is_vip:
-                await bot.send_message(uid, text=text_is_vip, parse_mode="HTML", reply_markup=kb_is_vip)
-                count_vip += 1
-            else:
-                await bot.send_message(uid, text=text_no_vip, parse_mode="HTML", reply_markup=kb_no_vip)
-                count_novip += 1
+        # 2. Відправляємо відповідний текст
+        if is_vip:
+            ok = await safe_send(uid, text_is_vip, parse_mode="HTML", reply_markup=kb_is_vip)
+            count_vip += 1 if ok else 0
+        else:
+            ok = await safe_send(uid, text_no_vip, parse_mode="HTML", reply_markup=kb_no_vip)
+            count_novip += 1 if ok else 0
 
-            await asyncio.sleep(0.05)  # Анти-спам
-
-        except Exception:
+        if not ok:
             failed += 1
+        await asyncio.sleep(0.05)  # Анти-спам
 
     await message.answer(
         f"✅ <b>Розсилка завершена!</b>\n\n"
@@ -426,12 +421,15 @@ async def admin_msg(message: Message):
 
 
 @router.message(Command("who"))
-async def pick_winner_cmd(message: Message):
+async def who_cmd(message: Message):
     if message.from_user.id != ADMIN_ID:
         return  # Тільки для адміна
 
     args = message.text.split(" ", 1)
-    who_id = args[1]
+    if len(args) < 2 or not args[1].strip():
+        await message.answer("Формат: <code>/who user_id</code>", parse_mode="HTML")
+        return
+    who_id = args[1].strip()
 
     try:
         # Отримуємо дані переможця
@@ -442,13 +440,26 @@ async def pick_winner_cmd(message: Message):
         username = "невідомо"
         name = "Користувач"
 
+    try:
+        vip_flag, expires = db.get_vip_status(int(who_id))
+        if not vip_flag:
+            vip_line = "немає"
+        elif expires == 0:
+            vip_line = "назавжди ♾️"
+        else:
+            until = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
+            active = "активний" if expires > time.time() else "прострочений"
+            vip_line = f"{active} до {until} ({db.get_vip_source(int(who_id))})"
+    except Exception:
+        vip_line = "невідомо"
+
     # 4. Формуємо повідомлення для адміна з посиланням на профіль
     text = (
         f"🎉 <b>Інформація про {who_id}!</b>\n\n"
         f"👤 <b>Ім'я:</b> {name}\n"
         f"🆔 <b>ID:</b> <code>{who_id}</code>\n"
         f"🔗 <b>Username:</b> {username}\n"
-        f"🎟 <b>Vip:</b> {db.get_vip_status(who_id)}\n"
+        f"🎟 <b>Vip:</b> {vip_line}\n"
         f"👉 <a href='tg://user?id={who_id}'>ВІДКРИТИ ПРОФІЛЬ ТА ПОДАРУВАТИ</a>\n\n"
     )
 
@@ -659,9 +670,13 @@ async def stats(message: Message):
     await message.answer_media_group(media)
 
 
-# --- NaurokFinder личная фича найденная вручную ---
+# --- NaurokFinder: особиста фіча, ТІЛЬКИ для адміна ---
+# Працює через NAUROK_COOKIE власника, тому доступ сторонніх виключений.
 @router.message(F.text.startswith("https://naurok.com.ua/test"))
-async def test(message: Message):
+async def naurok_finder(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
     url = message.text
     if url.startswith('https://naurok.com.ua/test/testing/'):
         try:

@@ -7,11 +7,15 @@ import logging
 from html import escape
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from loader import (
-    db, bot, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
+    db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
     USER_LAST_CALL, KYIV_TZ, fernet,
 )
-from services.diarynz import cleanup_session_cache, get_diary_schedule, get_grade_events
-from services.diaryhuman import get_diary_schedule_human
+from services.diarynz import (
+    cleanup_session_cache, get_diary_schedule, get_grade_events,
+    get_diary_homework, get_homework_events,
+)
+from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human
+from services.digest import has_lessons, build_digest_text
 from utils import safe_send
 import gc
 
@@ -22,6 +26,10 @@ LEAD_MIN = 5
 LESSON_LINE_RE = re.compile(
     r"^\s*\d+\.\s*(?:<i>)?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})(?:</i>)?\s*(.+?):\s*(.+)\s*$"
 )
+
+DIGEST_HOUR = 7
+DIGEST_MINUTE = 30
+DIGEST_ACTIVE_DAYS = 14  # кого вважаємо живим і варто скрапити щоранку
 
 # Кеш часів уроків Human на день: {user_id: {"date", "fetched_at", "lessons"}}.
 # Кешуємо тільки СТРУКТУРУ розкладу (коли уроки), а не посилання:
@@ -332,6 +340,163 @@ async def memory_cleaner_task():
         # 6. Принудительный сбор мусора (самое важное для PythonAnywhere)
         # Это удаляет "висячие" объекты картинок и буферов
         gc.collect()
+
+
+async def _fetch_digest_parts(user_id: int, login: str, enc_password: str, provider: str):
+    """Тягне розклад і ДЗ на сьогодні. Повертає (schedule, homework)."""
+    password = fernet.decrypt(enc_password.encode()).decode()
+
+    async with SEMAPHORE:
+        if provider == "human":
+            schedule = await asyncio.to_thread(
+                get_diary_schedule_human, login, password, ["сьогодні"]
+            )
+        else:
+            schedule = await asyncio.to_thread(
+                get_diary_schedule, login, password,
+                days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
+            )
+
+    if not has_lessons(schedule):
+        return schedule, ""
+
+    homework = ""
+    try:
+        async with SEMAPHORE:
+            if provider == "human":
+                homework = await asyncio.to_thread(
+                    get_diary_homework_human, login, password, "today"
+                )
+            else:
+                homework = await asyncio.to_thread(
+                    get_diary_homework, login, password,
+                    days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
+                )
+    except Exception:
+        # розклад важливіший за ДЗ — без нього дайджест все одно корисний
+        logger.exception("Digest homework fetch failed for user_id=%s", user_id)
+
+    return schedule, homework
+
+
+async def send_digest_to(user_id: int, login: str, enc_password: str, provider: str, is_vip: bool) -> bool:
+    """True якщо дайджест надіслано. Порожній день — не надсилаємо нічого."""
+    try:
+        schedule, homework = await _fetch_digest_parts(user_id, login, enc_password, provider)
+        if not has_lessons(schedule):
+            return False
+
+        kb = None if is_vip else InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⭐️ Хочу щоранку", callback_data="vip_menu")]
+        ])
+
+        return await safe_send(
+            user_id,
+            build_digest_text(schedule, homework, is_vip),
+            disable_notify_on_block=True,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=kb
+        )
+    except Exception:
+        logger.exception("Digest failed for user_id=%s", user_id)
+        return False
+
+
+async def morning_digest_task():
+    """07:30 — дайджест дня. VIP щодня, решта по понеділках (з апселом)."""
+    while True:
+        now = datetime.datetime.now(KYIV_TZ)
+        nxt = now.replace(hour=DIGEST_HOUR, minute=DIGEST_MINUTE, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += datetime.timedelta(days=1)
+        await asyncio.sleep((nxt - now).total_seconds())
+
+        try:
+            today = datetime.datetime.now(KYIV_TZ)
+            if today.weekday() >= 5:
+                continue  # вихідні — уроків нема, не скрапимо взагалі
+
+            is_monday = today.weekday() == 0
+            recipients = [
+                row for row in db.get_digest_recipients(DIGEST_ACTIVE_DAYS)
+                if is_monday or row[4]  # row[4] = is_vip
+            ]
+            logger.info("Morning digest: %s recipients (monday=%s)", len(recipients), is_monday)
+
+            sent = 0
+            # чанками, щоб не тримати тисячу корутин на low-RAM VPS
+            for i in range(0, len(recipients), 25):
+                chunk = recipients[i:i + 25]
+                results = await asyncio.gather(*[
+                    send_digest_to(uid, login, pwd, provider, is_vip)
+                    for uid, login, pwd, provider, is_vip in chunk
+                ])
+                sent += sum(1 for ok in results if ok)
+                await asyncio.sleep(1)
+
+            logger.info("Morning digest done: sent=%s", sent)
+        except Exception:
+            logger.exception("Morning digest task failed")
+
+
+async def check_homework():
+    """Пуш про НОВЕ ДЗ. Тільки NZ: у Human інша структура і 30 юзерів."""
+    while True:
+        for user_id, login, enc_password, provider in db.get_users_with_homework_notify():
+            try:
+                if provider != "nz" or not login or not enc_password:
+                    continue
+
+                vip_flag, expires = db.get_vip_status(user_id)
+                now_ts = int(time.time())
+                if not (bool(vip_flag) and (expires == 0 or expires > now_ts)):
+                    continue
+
+                password = fernet.decrypt(enc_password.encode()).decode()
+                async with SEMAPHORE:
+                    events = await asyncio.to_thread(
+                        get_homework_events, login, password,
+                        days=["сьогодні", "завтра"],
+                        user_id=user_id, db=db, fernet=fernet
+                    )
+
+                if not events:
+                    continue
+
+                known = db.get_homework_hashes(user_id)
+                current = [e["hash"] for e in events]
+
+                # перший запуск: запам'ятовуємо стан і НЕ шлемо всю історію
+                if not known:
+                    db.set_homework_hashes(user_id, current)
+                    continue
+
+                known_set = set(known)
+                new_events = [e for e in events if e["hash"] not in known_set]
+                if not new_events:
+                    continue
+
+                lines = ["📕 <b>Нове домашнє завдання</b>", ""]
+                for ev in new_events[:5]:
+                    lines.append(f"• <b>{escape(ev['subject'])}</b> ({escape(ev['day'])}):")
+                    lines.append(f"<blockquote expandable>{escape(ev['hw'])}</blockquote>")
+                if len(new_events) > 5:
+                    lines.append(f"\n<i>…і ще {len(new_events) - 5}</i> — /homework")
+
+                # хеші фіксуємо лише після успішної відправки
+                if await safe_send(user_id, "\n".join(lines),
+                                   disable_notify_on_block=True,
+                                   parse_mode="HTML",
+                                   disable_web_page_preview=True):
+                    merged = current + [h for h in known if h not in set(current)]
+                    db.set_homework_hashes(user_id, merged)
+                await asyncio.sleep(0.25)
+
+            except Exception:
+                logger.exception("Homework notification failed for user_id=%s", user_id)
+
+        await asyncio.sleep(20 * 60)
 
 
 WINBACK_GRACE_SEC = 48 * 3600  # тримати синхронно з handlers/vip.py

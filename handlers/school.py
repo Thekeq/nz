@@ -24,10 +24,6 @@ GRADE_LINE_RE = re.compile(
 )
 
 
-# ... (Сюди встав функції get_diary, homework_cmd, news_command, get_grades з main.py)
-# Важливо: заміни декоратори @router.message(...) і перевір імпорти.
-# Я покажу приклад для однієї функції, інші аналогічно копіюються.
-
 @router.message(Command('diary'))
 @router.message(F.text == "📅 Розклад")
 async def get_diary(message: Message, state: FSMContext):
@@ -148,8 +144,9 @@ async def homework_cmd(message: Message, state: FSMContext):
             disable_web_page_preview=True
         )
 
-    except Exception as e:
-        await message.answer(f"❌ Помилка при отриманні ДЗ: {e}\nСпробуйте ще раз пізніше.")
+    except Exception:
+        logger.exception("Failed to get homework for user_id=%s", user_id)
+        await message.answer("❌ Не вдалося отримати ДЗ. Спробуйте ще раз пізніше.", reply_markup=kb_retry)
 
 
 @router.message(Command('news'))
@@ -198,8 +195,9 @@ async def news_command(message: Message, state: FSMContext):
                 await process_referral_reward(user_id)
 
         await message.answer(text, reply_markup=result_actions_kb(user_id))
-    except Exception as e:
-        await message.answer(f"❌ Помилка при отриманні новин: {e}")
+    except Exception:
+        logger.exception("Failed to get news for user_id=%s", user_id)
+        await message.answer("❌ Не вдалося отримати новини. Спробуйте пізніше.", reply_markup=kb_retry)
 
 
 def photo_grades(text):
@@ -367,8 +365,9 @@ async def diary_day_selected(callback: CallbackQuery):
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
                 await process_referral_reward(user_id)
 
-    except Exception as e:
-        await callback.message.answer(f"❌ Помилка при отриманні розкладу: {e}")
+    except Exception:
+        logger.exception("Failed to get diary day for user_id=%s day=%s", user_id, day)
+        await callback.message.answer("❌ Не вдалося отримати розклад. Спробуйте пізніше.")
         return
 
     keyboard = await keyboard_diary(provider)
@@ -422,8 +421,9 @@ async def diary_hw_selected(callback: CallbackQuery):
                     fernet=fernet
                 )
 
-    except Exception as e:
-        await callback.message.answer(f"❌ Помилка: {e}")
+    except Exception:
+        logger.exception("Failed to get homework day for user_id=%s day=%s", user_id, day)
+        await callback.message.answer("❌ Не вдалося отримати ДЗ. Спробуйте пізніше.")
         return
 
     # Отримуємо чисту клавіатуру навігації

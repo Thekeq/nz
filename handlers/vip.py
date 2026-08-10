@@ -79,8 +79,10 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"👕 /wrapped — <b>Ексклюзивні теми (Matrix, Gold, Ocean)</b>\n"
             f"📅 /diary_days (/diary) — <b>Перегляд розкладу по дням</b>\n"
             f"📊 /avg_grades — <b>Розумний прогноз оцінок, рейтинг предметів, діаграма-павутинка</b>\n"
+            f"🌅 <b>Ранковий дайджест о 7:30 щодня</b>\n"
             f"⏰ /notify — <b>Нагадування перед уроками</b>\n"
             f"🔔 /notify_grades — <b>Сповіщення о нових оцінках (nz)</b>\n"
+            f"📕 /notify_homework — <b>Сповіщення про нове ДЗ (nz)</b>\n"
             f"⚡ <b>Пріоритетні запити та підтримка</b>\n\n"
             f"<blockquote>🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 3 дні за кожного друга!\n"
             f"Прогрес: <b>{progress_text}</b>\n"
@@ -97,11 +99,13 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання: https://t.me/{BOT_USERNAME}?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
+            f"🌅 Ранковий дайджест о 7:30 <b>щодня</b> (без VIP — раз на тиждень)\n"
             f"🎨 Ексклюзивні теми (Matrix, Gold, Ocean)\n"
             f"✨ ШІ-асистент без тижневих лімітів\n"
             f"📅 Перегляд розкладу по дням\n"
             f"⏰ Нагадування за 5-хв до уроку\n"
             f"🔔 Сповіщення про нові оцінки (NZ)\n"
+            f"📕 Сповіщення про нове ДЗ (NZ)\n"
             f"📊 Розширений рейтинг та статистика, діаграма-павутинка\n"
             f"⚡ Пріоритетні запити та швидка підтримка\n\n"
             f"💎 <b>Оберіть тариф</b> — оплата Telegram Stars, активація миттєва:\n\n"
@@ -698,6 +702,34 @@ async def turn_notify_grades(message: Message):
             await message.answer("✅ Сповіщення про нові оцінки увімкнені!")
         else:
             await message.answer("❌ Сповіщення про нові оцінки вимкнені!")
+
+
+@router.message(Command("notify_homework"))
+async def turn_notify_homework(message: Message):
+    user_id = message.from_user.id
+    track_activity(user_id)
+
+    if not _is_vip(user_id):
+        await message.answer("🔒 Сповіщення про нове ДЗ доступні лише VIP-користувачам.\n"
+                             "🎁 Хочеш VIP безкоштовно? Запроси друга у /vip",
+                             reply_markup=vip_upsell_kb())
+        return
+
+    _, _, provider = db.get_user(user_id)
+    if provider == "human":
+        await message.reply(
+            "ℹ️ Сповіщення про ДЗ наразі працюють лише для щоденника <b>Нові Знання</b>.\n"
+            "Для <b>Human</b> ця функція зʼявиться пізніше 👀",
+            parse_mode="HTML"
+        )
+        return
+
+    if db.toggle_notify_homework(user_id):
+        await message.answer("✅ Сповіщення про нове ДЗ увімкнені!\n"
+                             "<i>Перевіряю щодня, надішлю як тільки вчитель задасть нове.</i>",
+                             parse_mode="HTML")
+    else:
+        await message.answer("❌ Сповіщення про нове ДЗ вимкнені!")
 
 
 @router.message(Command("notify"))

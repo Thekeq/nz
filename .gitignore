@@ -34,5 +34,4 @@ ENV/
 .cache/
 
 #codex
-tests/
 .agents/

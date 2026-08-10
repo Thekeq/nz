@@ -9,20 +9,32 @@ logger = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = 5
 
 
-async def safe_send(user_id: int, text: str, disable_notify_on_block: bool = False, **kwargs) -> bool:
-    """Надсилає повідомлення з обробкою лімітів Telegram.
+async def safe_send(
+        user_id: int,
+        text: str,
+        disable_notify_on_block: bool = False,
+        photo: str | None = None,
+        **kwargs
+) -> bool:
+    """Надсилає повідомлення (або фото з підписом) з обробкою лімітів Telegram.
 
     Повертає True, якщо надіслано. При флуд-ліміті чекає і повторює один раз.
     Якщо юзер заблокував бота і disable_notify_on_block=True — вимикає йому
     розсилки в БД, щоб не скрапити дневник даремно.
     """
+    async def deliver():
+        if photo:
+            await bot.send_photo(user_id, photo=photo, caption=text, **kwargs)
+        else:
+            await bot.send_message(user_id, text, **kwargs)
+
     try:
-        await bot.send_message(user_id, text, **kwargs)
+        await deliver()
         return True
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after + 1)
         try:
-            await bot.send_message(user_id, text, **kwargs)
+            await deliver()
             return True
         except Exception:
             logger.exception("Retry send failed for user_id=%s", user_id)

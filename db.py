@@ -191,11 +191,22 @@ class DataBase:
                 "ALTER TABLE subs ADD COLUMN expiry_stage INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE subs ADD COLUMN ai_free_used INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE subs ADD COLUMN ai_free_week INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE subs ADD COLUMN notify_homework INTEGER NOT NULL DEFAULT 0",
             ):
                 try:
                     self.connection.execute(ddl)
                 except Exception:
                     pass
+
+            # Хеші вже надісланих ДЗ (щоб пушити тільки нові)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS homework_state (
+                  user_id    INTEGER PRIMARY KEY,
+                  hashes     TEXT NOT NULL DEFAULT '',
+                  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                  FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+            """)
 
             # Видані реферальні нагороди (для місячного ліміту безкоштовного VIP)
             self.connection.execute("""
@@ -835,6 +846,101 @@ class DataBase:
                 WHERE s.notify_grades=1
                 """
             ).fetchall()
+
+    def toggle_notify_homework(self, user_id: int) -> bool:
+        self.ensure_user(user_id)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT notify_homework FROM subs WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            current = int(row[0] or 0) if row else 0
+            new_val = 0 if current == 1 else 1
+            self.connection.execute(
+                """
+                INSERT INTO subs(user_id, notify_homework) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET notify_homework=excluded.notify_homework
+                """,
+                (user_id, new_val)
+            )
+        return bool(new_val)
+
+    def user_notify_homework(self, user_id: int) -> bool:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT notify_homework FROM subs WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            return bool(int(row[0] or 0)) if row else False
+
+    def get_users_with_homework_notify(self):
+        with self.connection:
+            return self.connection.execute(
+                """
+                SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
+                FROM subs s
+                JOIN users u ON u.user_id=s.user_id
+                LEFT JOIN creds c ON c.user_id=u.user_id
+                WHERE s.notify_homework=1
+                """
+            ).fetchall()
+
+    def get_homework_hashes(self, user_id: int) -> list[str]:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT hashes FROM homework_state WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            if not row or not row[0]:
+                return []
+            return row[0].split("|")
+
+    def set_homework_hashes(self, user_id: int, hashes: list[str], keep: int = 80):
+        """Тримаємо вікно останніх хешів: ДЗ на день може бути ~10 позицій."""
+        self.ensure_user(user_id)
+        value = "|".join(hashes[:keep])
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO homework_state(user_id, hashes, updated_at)
+                VALUES (?, ?, strftime('%s','now'))
+                ON CONFLICT(user_id) DO UPDATE SET
+                    hashes=excluded.hashes,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, value)
+            )
+
+    # ===== Ранковий дайджест =====
+
+    def get_digest_recipients(self, active_days: int = 14):
+        """Користувачі з підтвердженими кредами, активні за останні active_days.
+        Фільтр по активності не дає скрапити мертві акаунти щоранку.
+        Повертає (user_id, login, password, provider, is_vip)."""
+        min_day = datetime.date.today().toordinal() - active_days
+        now_ts = int(datetime.datetime.now().timestamp())
+        with self.connection:
+            rows = self.connection.execute(
+                """
+                SELECT c.user_id, c.login, c.password, COALESCE(c.provider,'nz'),
+                       COALESCE(s.vip,0), COALESCE(s.expires,0)
+                FROM creds c
+                LEFT JOIN subs s ON s.user_id=c.user_id
+                WHERE c.login IS NOT NULL AND c.password IS NOT NULL
+                  AND c.verified=1
+                  AND EXISTS (
+                      SELECT 1 FROM activity a
+                      WHERE a.user_id=c.user_id AND a.day >= ?
+                  )
+                """,
+                (min_day,)
+            ).fetchall()
+
+        out = []
+        for user_id, login, password, provider, vip, expires in rows:
+            is_vip = bool(vip) and (int(expires or 0) == 0 or int(expires or 0) > now_ts)
+            out.append((user_id, login, password, provider, is_vip))
+        return out
 
     def get_last_grade_hashes(self, user_id: int) -> list[str]:
         with self.connection:
