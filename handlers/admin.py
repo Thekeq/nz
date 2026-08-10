@@ -41,7 +41,7 @@ async def admin_help(message: Message):
         "<b>🎁 Управління юзерами:</b>\n"
         "• <code>/gift_vip user_id days</code> — Видати VIP.\n"
         "<i>Приклад: /gift_vip 1076078800 30 (0 = назавжди)</i>\n"
-        "• <code>/gift_tokens user_id amount</code> — Нарахувати AI токени.\n"
+        "• <code>/gift_tokens user_id amount</code> — Нарахувати ШІ-токени.\n"
         "<i>Приклад: /gift_tokens 1076078800 1000</i>\n\n"
 
         "<b>📢 Маркетинг:</b>\n"
@@ -144,12 +144,12 @@ async def gift_tokens(message: Message):
     new = db.get_tokens(reply_id)
 
     # Формуємо красивий текст
-    await message.answer(f"✅ Видано AI-tokens: <b>{tokens:,}</b>", parse_mode="HTML")
+    await message.answer(f"✅ Видано ШІ-токенів: <b>{tokens:,}</b>", parse_mode="HTML")
 
     try:
         await bot.send_message(
             reply_id,
-            f"🎉 Ви отримали AI-tokens: <b>{tokens:,}</b>\n"
+            f"🎉 Ви отримали ШІ-токени: <b>{tokens:,}</b>\n"
             f"💎 Ваш баланс: <b>{new:,}/1,000,000</b>",
             parse_mode="HTML"
         )

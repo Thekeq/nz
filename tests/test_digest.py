@@ -1,7 +1,12 @@
 import importlib.util
 import unittest
 
-from services.digest import has_lessons, first_conf_link, build_digest_text, homework_hash
+from services.digest import (
+    has_lessons, has_conf_link, first_conf_link, build_digest_text, homework_hash,
+)
+
+# новий формат рядка NZ: предмет-посилання замість «голого» URL
+NZ_ANCHOR_LINE = '1. <i>08:00 - 08:45</i> <a href="https://meet.google.com/aaa-bbb-ccc">Алгебра</a> 🔗'
 
 missing_deps = [
     name
@@ -58,6 +63,23 @@ class FirstConfLinkTests(unittest.TestCase):
     def test_link_is_not_polluted_by_markup(self):
         text = '1. Фізика: <a href="https://meet.google.com/xyz-abcd-efg">тут</a>'
         self.assertEqual(first_conf_link(text), "https://meet.google.com/xyz-abcd-efg")
+
+
+class AnchorFormatTests(unittest.TestCase):
+    """Нагадування про уроки шукають посилання в тексті розкладу.
+    Після переходу на предмет-посилання воно мусить знаходитись так само."""
+
+    def test_reminder_still_sees_link_in_anchor(self):
+        self.assertTrue(has_conf_link(NZ_ANCHOR_LINE))
+
+    def test_no_link_line_is_not_matched(self):
+        self.assertFalse(has_conf_link("1. <i>08:00 - 08:45</i> Алгебра: —"))
+
+    def test_anchor_line_counts_as_lesson(self):
+        self.assertTrue(has_lessons(NZ_ANCHOR_LINE))
+
+    def test_digest_extracts_url_from_anchor(self):
+        self.assertEqual(first_conf_link(NZ_ANCHOR_LINE), "https://meet.google.com/aaa-bbb-ccc")
 
 
 class BuildDigestTests(unittest.TestCase):

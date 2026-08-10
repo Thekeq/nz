@@ -15,7 +15,7 @@ from services.diarynz import (
     get_diary_homework, get_homework_events,
 )
 from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human
-from services.digest import has_lessons, build_digest_text
+from services.digest import has_lessons, has_conf_link, build_digest_text
 from utils import safe_send
 import gc
 
@@ -72,10 +72,6 @@ def parse_human_schedule_text(schedule_text: str) -> list[dict]:
 def build_dt_for_today(hhmm: str, now: datetime.datetime) -> datetime.datetime:
     h, m = map(int, hhmm.split(":"))
     return now.replace(hour=h, minute=m, second=0, microsecond=0)
-
-
-def _has_conf_link(s: str) -> bool:
-    return ("meet.google.com" in s) or ("zoom.us" in s)
 
 
 async def check_lessons():
@@ -149,7 +145,7 @@ async def _check_lessons_nz(user_id: int, login: str, enc_password: str):
             return
 
         lesson_name = lessons_list[target_idx - 1]
-        if not _has_conf_link(lesson_name):
+        if not has_conf_link(lesson_name):
             return  # посилання ще нема — перевіримо наступної хвилини
 
         text = (
@@ -218,7 +214,7 @@ async def _check_lessons_human(user_id: int, login: str, enc_password: str):
                 continue
 
             link = les.get("link") or ""
-            if not link or not _has_conf_link(link):
+            if not link or not has_conf_link(link):
                 continue  # посилання ще нема — перевіримо наступної хвилини
 
             key = _human_key(now, les)

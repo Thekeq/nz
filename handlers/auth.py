@@ -3,6 +3,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
+import texts
 from loader import db, fernet, SEMAPHORE
 from states import AuthStates
 from keyboards import kb_provider, kb_retry
@@ -24,7 +25,7 @@ async def login(message: Message, state: FSMContext):
     await message.answer("Оберіть щоденник:", reply_markup=kb_provider)
 
 
-@router.message(F.text == "🔑 Увійти у щоденник")
+@router.message(F.text.in_({texts.BTN_LOGIN}))
 async def login_text(message: Message, state: FSMContext):
     await login(message, state)
 

@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from quickchart import QuickChart
 
+import texts
 from loader import db, fernet, SEMAPHORE, ADMIN_ID
 from utils import user_can_call, track_activity, process_referral_reward
 from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button, result_actions_kb
@@ -25,7 +26,7 @@ GRADE_LINE_RE = re.compile(
 
 
 @router.message(Command('diary'))
-@router.message(F.text == "📅 Розклад")
+@router.message(F.text.in_(texts.DIARY_LABELS))
 async def get_diary(message: Message, state: FSMContext):
     user_id = message.from_user.id
     track_activity(user_id)
@@ -95,7 +96,7 @@ async def get_diary(message: Message, state: FSMContext):
 
 
 @router.message(Command("homework"))
-@router.message(F.text == "📕 Д/з")
+@router.message(F.text.in_(texts.HOMEWORK_LABELS))
 async def homework_cmd(message: Message, state: FSMContext):
     user_id = message.from_user.id
     track_activity(user_id)
@@ -150,7 +151,7 @@ async def homework_cmd(message: Message, state: FSMContext):
 
 
 @router.message(Command('news'))
-@router.message(F.text == "📰 Новини")
+@router.message(F.text.in_(texts.NEWS_LABELS))
 async def news_command(message: Message, state: FSMContext):
     user_id = message.from_user.id
     track_activity(user_id)
@@ -256,7 +257,7 @@ def photo_grades(text):
 
 
 @router.message(Command('avg_grades'))
-@router.message(F.text == "📊 Статистика")
+@router.message(F.text.in_(texts.GRADES_LABELS))
 async def get_grades(message: Message, state: FSMContext):
     user_id = message.from_user.id
     track_activity(user_id)

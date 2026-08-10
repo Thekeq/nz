@@ -7,6 +7,8 @@ import hashlib
 import re
 from html import escape
 
+NO_HOMEWORK = "✅ ДЗ не знайдено."
+
 CONF_LINK_RE = re.compile(r"https://(?:meet\.google\.com|[\w.-]*zoom\.us)/[^\s<\"']+")
 LESSON_ROW_RE = re.compile(r"\s*\d+\.\s*\S")
 
@@ -19,6 +21,14 @@ def homework_hash(subject: str, hw: str) -> str:
     """
     raw = f"{subject}|{hw}".encode("utf-8", "ignore")
     return hashlib.sha1(raw).hexdigest()
+
+
+def has_conf_link(text: str) -> bool:
+    """Чи є в рядку посилання на онлайн-урок.
+
+    Працює і коли URL «голий», і коли він у href предмета-посилання.
+    """
+    return ("meet.google.com" in text) or ("zoom.us" in text)
 
 
 def has_lessons(schedule_text: str) -> bool:

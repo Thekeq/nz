@@ -5,6 +5,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, \
     InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
+import texts
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
 from states import SupportStates, AuthStates  # Якщо треба
@@ -16,7 +17,6 @@ POLICY_NOTE = "\n\n<i>Використовуючи бот, ви погоджує
 
 
 @router.message(CommandStart())
-@router.message(F.text == "ℹ️ Головне меню")
 async def start(message: Message, state: FSMContext):
     user_id = message.from_user.id
 
@@ -55,76 +55,34 @@ async def start(message: Message, state: FSMContext):
     ) + POLICY_NOTE
 
     if db.has_credentials(user_id):
-        # 1. Текст для VIP користувачів
-        vip_text = (
-            "👋 <b>Вітаю у головному меню!</b>\n\n"
-            "🎓 <b>Навчання:</b>\n"
-            "📅 /diary — Розклад уроків\n"
-            "📕 /homework — Д/з та поради ШІ\n"
-            "📊 /avg_grades — Оцінки, прогнози та рейтинг\n"
-            "📰 /news — Шкільні новини\n"
-            "🌅 Ранковий дайджест о 7:30 — щодня\n"
-            "⏰ /notify — Нагадування перед уроками\n"
-            "🔔 /notify_grades — Сповіщення о нових оцінках (nz)\n"
-            "📕 /notify_homework — Сповіщення про нове ДЗ (nz)\n\n"
-            "🤖 <b>AI та Інструменти:</b>\n"
-            "✨ /ai — Чат з розумним помічником\n"
-            "🎨 /wrapped — Підсумки тижня у картинках\n"
-            "🏆 /leaderboard — Топ учнів та розіграші\n\n"
-            "⚙️ <b>Інше:</b>\n"
-            "⭐️ /vip — Мій статус та бонуси\n"
-            "📜 /policy — Правила користування\n"
-            "🔧 /support — Підтримка\n"
-            "🚪 /logout — Вихід з акаунту"
-        ) + POLICY_NOTE
-
-        # 2. Текст для звичайних користувачів
-        free_text = (
-            "👋 <b>Вітаю у головному меню!</b>\n\n"
-            "🎓 <b>Навчання:</b>\n"
-            "📅 /diary — Розклад уроків\n"
-            "📕 /homework — Домашні завдання\n"
-            "📊 /avg_grades — Середній бал\n"
-            "📰 /news — Шкільні новини\n\n"
-            "🌅 Дайджест дня — по понеділках\n\n"
-            "🚀 <b>Додатково:</b>\n"
-            "🎨 /wrapped — Підсумки тижня у картинці\n"
-            "⭐️ <b>/vip — Дайджест щодня, ШІ, аналітика та стилі</b>\n"
-            "🏆 /leaderboard — Топ учнів та розіграші\n\n"
-            "⚙️ <b>Інше:</b>\n"
-            "📜 /policy — Правила користування\n"
-            "🔧 /support — Підтримка\n"
-            "🚪 /logout — Вихід з акаунту"
-        ) + POLICY_NOTE
-
         if message.chat.type == "private":
             vip_flag, expires = db.get_vip_status(user_id)
             now_ts = int(time.time())
             is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
-            if is_vip:
-                await message.answer(vip_text, parse_mode="HTML", reply_markup=build_vip_kb())
-            else:
-                await message.answer(free_text, parse_mode="HTML", reply_markup=build_main_kb())
-        else:
-            # У групах не показуємо клавіатуру, тільки текст (скорочений)
-            group_text = (
-                "🎓 <b>Меню бота:</b>\n"
-                "/diary — Розклад\n"
-                "/homework — ДЗ\n"
-                "/avg_grades — Оцінки\n"
-                "/ai — ШІ помічник (VIP)\n"
-                "/leaderboard — Рейтинг\n"
-                "/logout — Вихід"
+            # Клавіатура — для щоденних дій, повний список команд — у /help.
+            # Раніше тут дублювались обидві навігації одночасно.
+            await message.answer(
+                "👋 <b>Головне меню</b>\n\n"
+                "Обирай дію на клавіатурі нижче ↓\n"
+                "Усі команди — /help",
+                parse_mode="HTML",
+                reply_markup=build_vip_kb() if is_vip else build_main_kb()
             )
-            await message.answer(group_text, parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+        else:
+            await message.answer(
+                "🎓 <b>Бот працює в особистих повідомленнях</b>\n"
+                "Команди: /diary, /homework, /avg_grades, /help",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardRemove()
+            )
     else:
         if message.chat.type == "private":
             await message.answer(welcome_text, parse_mode="HTML",
                                  reply_markup=ReplyKeyboardMarkup(
                                      keyboard=[
-                                         [KeyboardButton(text="🔍 Показати приклад")],
-                                         [KeyboardButton(text="🔑 Увійти у щоденник")],
+                                         [KeyboardButton(text=texts.BTN_EXAMPLE)],
+                                         [KeyboardButton(text=texts.BTN_LOGIN)],
                                      ],
                                      resize_keyboard=True
                                  ))
@@ -134,8 +92,48 @@ async def start(message: Message, state: FSMContext):
                 "Щоб почати, надішліть боту особисте повідомлення командою /start та увійдіть у свій акаунт")
 
 
+@router.message(Command('help'))
+@router.message(F.text.in_(texts.HELP_LABELS))
+async def help_cmd(message: Message):
+    """Повний список команд. Емодзі — тільки на розділах:
+    коли підсвічено все, не підсвічено ніщо."""
+    vip_flag, expires = db.get_vip_status(message.from_user.id)
+    is_vip = bool(vip_flag) and (expires == 0 or expires > int(time.time()))
+
+    text = (
+        "📚 <b>Навчання</b>\n"
+        "/diary — розклад уроків\n"
+        f"/homework — {texts.HOMEWORK_WORD} та порада ШІ\n"
+        "/avg_grades — оцінки та аналітика\n"
+        "/news — шкільні новини\n\n"
+
+        "🔔 <b>Сповіщення</b>\n"
+        "/notify — перед уроками ⭐️\n"
+        "/notify_grades — нові оцінки, NZ ⭐️\n"
+        f"/notify_homework — нове {texts.HOMEWORK_WORD}, NZ ⭐️\n"
+        "Ранковий дайджест о 7:30 — щодня ⭐️, без VIP по понеділках\n\n"
+
+        "✨ <b>Інструменти</b>\n"
+        "/ai — чат з ШІ\n"
+        "/wrapped — підсумки тижня картинкою\n"
+        "/leaderboard — топ амбасадорів\n\n"
+
+        "⚙️ <b>Акаунт</b>\n"
+        "/vip — статус, тарифи, бонуси\n"
+        "/support — підтримка\n"
+        "/policy — правила\n"
+        "/logout — вихід\n\n"
+
+        "<i>⭐️ — тільки для VIP</i>"
+    )
+    if not is_vip:
+        text += "\n<i>Отримати VIP безкоштовно за друга — /vip</i>"
+
+    await message.answer(text, parse_mode="HTML")
+
+
 @router.message(Command('policy'))
-@router.message(F.text == "📖 Політика")
+@router.message(F.text.in_(texts.POLICY_LABELS))
 async def policy(message: Message):
     policy_text = (
         "🔐 <b>Політика конфіденційності та умови використання</b>\n"
@@ -158,7 +156,7 @@ async def policy(message: Message):
         "• Тип щоденника (NZ / Human)\n"
         "• Сесійні cookie щоденника — щоб не входити повторно при кожному запиті\n"
         "• Налаштування сповіщень і ранкового дайджесту\n"
-        "• VIP-статус, термін дії, спосіб отримання (оплата / реферал), баланс AI-токенів\n"
+        "• VIP-статус, термін дії, спосіб отримання (оплата / реферал), баланс ШІ-токенів\n"
         "• Кількість дій по днях і час виконання команд — для статистики та діагностики\n"
         "• Реферальні звʼязки (хто кого запросив)\n"
         "• Тимчасовий стан діалогу (наприклад, крок авторизації) — щоб бот не «губив» "
@@ -174,7 +172,7 @@ async def policy(message: Message):
         "<b>5. Для чого використовуються дані</b>\n"
         "• вхід у ваш щоденник і отримання розкладу, ДЗ, оцінок, новин\n"
         "• надсилання сповіщень і ранкового дайджесту (за вашим бажанням)\n"
-        "• робота AI-асистента\n"
+        "• робота ШІ-асистента\n"
         "• VIP-функції, оплата, реферальна програма, розіграші\n"
         "• внутрішня аналітика та пошук помилок\n"
         "Дані <b>не продаються</b> і не передаються третім особам, крім сервісів, "
@@ -208,19 +206,19 @@ async def policy(message: Message):
 
         "<b>9. Реферальна програма</b>\n"
         "За кожного друга, який реально підключив щоденник, ви отримуєте 3 дні VIP "
-        "(до 9 днів на місяць). Реферальний VIP не включає AI-токени та ексклюзивні "
+        "(до 9 днів на місяць). Реферальний VIP не включає ШІ-токени та ексклюзивні "
         "теми звіту. Накрутка фейковими акаунтами веде до скасування бонусів "
         "та обмеження доступу.\n\n"
 
         "<b>10. Штучний інтелект</b>\n"
-        "AI може помилятися або вигадувати (галюцинувати). Його відповіді — "
-        "довідкові, їх треба перевіряти. Не покладайтесь на AI у важливих "
-        "навчальних рішеннях. AI-функції обмежені токенами: у VIP — 1 000 000, "
+        "ШІ може помилятися або вигадувати (галюцинувати). Його відповіді — "
+        "довідкові, їх треба перевіряти. Не покладайтесь на ШІ у важливих "
+        "навчальних рішеннях. ШІ-функції обмежені токенами: у VIP — 1 000 000, "
         "без VIP — кілька безкоштовних запитів на тиждень.\n\n"
 
         "<b>11. Обмеження відповідальності</b>\n"
         "Сервіс надається «як є». Розробник не відповідає за: зміни чи збої NZ.ua "
-        "та Human.ua, тимчасову недоступність бота, помилки AI, неточності або "
+        "та Human.ua, тимчасову недоступність бота, помилки ШІ, неточності або "
         "затримки в даних (зокрема пропущені нагадування, якщо вчитель додав "
         "посилання надто пізно).\n\n"
 
@@ -274,7 +272,7 @@ async def support_send(message: Message, state: FSMContext):
     await state.clear()
 
 
-@router.message(F.text == "🔍 Показати приклад")
+@router.message(F.text.in_({texts.BTN_EXAMPLE}))
 async def example_text(message: Message):
     user_id = message.from_user.id
     allowed = await user_can_call(user_id, "example", cooldown=3)

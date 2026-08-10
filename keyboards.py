@@ -3,6 +3,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import datetime
 import uuid
 import pytz
+import texts
 from loader import BOT_USERNAME, HW_AI_CACHE
 from utils import clean_html
 from urllib.parse import quote
@@ -35,19 +36,15 @@ def build_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="📅 Розклад"),
-                KeyboardButton(text="📕 Д/з")
+                KeyboardButton(text=texts.BTN_DIARY),
+                KeyboardButton(text=texts.BTN_HOMEWORK),
+                KeyboardButton(text=texts.BTN_GRADES),
             ],
             [
-                KeyboardButton(text="📊 Статистика"),
-                KeyboardButton(text="📰 Новини")
+                KeyboardButton(text=texts.BTN_NEWS),
+                KeyboardButton(text=texts.BTN_VIP_FREE),
+                KeyboardButton(text=texts.BTN_HELP),
             ],
-            [
-                KeyboardButton(text="⭐️ Free VIP")
-            ],
-            [
-                KeyboardButton(text="ℹ️ Головне меню")
-            ]
         ],
         resize_keyboard=True,
         input_field_placeholder="Обери дію…"
@@ -58,20 +55,15 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="📅 Розклад"),
-                KeyboardButton(text="📕 Д/з")
+                KeyboardButton(text=texts.BTN_DIARY),
+                KeyboardButton(text=texts.BTN_HOMEWORK),
+                KeyboardButton(text=texts.BTN_GRADES),
             ],
             [
-                KeyboardButton(text="📊 Статистика"),
-                KeyboardButton(text="📰 Новини"),
+                KeyboardButton(text=texts.BTN_NEWS),
+                KeyboardButton(text=texts.BTN_AI),
+                KeyboardButton(text=texts.BTN_HELP),
             ],
-            [
-                KeyboardButton(text="✨ ШІ"),
-                KeyboardButton(text="⭐️ VIP"),
-            ],
-            [
-                KeyboardButton(text="ℹ️ Головне меню")
-            ]
         ],
         resize_keyboard=True,
         input_field_placeholder="Обери дію…"
@@ -276,7 +268,7 @@ def add_ai_button(kb: InlineKeyboardMarkup, text_content: str) -> InlineKeyboard
     """Додає кнопку ШІ до існуючої клавіатури, зберігаючи текст у кеш."""
     # 1. Очищаємо текст і зберігаємо в кеш
     clean_text = clean_html(text_content)
-    if clean_text == "✅ Д/з не знайдено." or clean_text == "📚 ДЗ на тиждень —":
+    if clean_text in (texts.NO_HOMEWORK, "✅ Д/з не знайдено.", "📚 ДЗ на тиждень —"):
         return kb
     temp_id = str(uuid.uuid4())[:8]
     HW_AI_CACHE[temp_id] = clean_text

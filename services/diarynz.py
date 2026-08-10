@@ -1,4 +1,5 @@
 import re
+import html
 import logging
 import json
 import threading
@@ -15,7 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 
-from services.digest import homework_hash
+from services.digest import homework_hash, NO_HOMEWORK
 
 logger = logging.getLogger(__name__)
 _SESSION_LOCKS: dict[int, threading.RLock] = {}
@@ -585,26 +586,25 @@ def get_diary_schedule(
             for i, lesson in enumerate(visible_lessons, start=1):
                 output += f"{i}. "
                 if lesson["time"]: output += f"<i>{lesson['time']}</i> "
-                output += lesson["subject"]
 
+                subject = html.escape(lesson["subject"])
                 link = lesson['meet']
-                if link:
+
+                if link and is_tiktok_mode:
                     # 🔥🔥🔥 TIKTOK LOGIC 🔥🔥🔥
-                    if is_tiktok_mode:
-                        # Если ссылка длинная, прячем последние 8 символов
-                        if len(link) > 15:
-                            safe_part = link[:-8]
-                            hidden_part = link[-8:]
-                            # Используем Telegram Spoiler
-                            final_link_text = f"{safe_part}<tg-spoiler>{hidden_part}</tg-spoiler>"
-                            output += f": {final_link_text}"
-                        else:
-                            # Если ссылка короткая, просто под спойлер всю
-                            output += f": <tg-spoiler>{link}</tg-spoiler>"
+                    # тут посилання лишається текстом: сенс режиму — показати
+                    # його на екрані, але приховати хвіст під спойлером
+                    output += subject
+                    if len(link) > 15:
+                        output += f": {link[:-8]}<tg-spoiler>{link[-8:]}</tg-spoiler>"
                     else:
-                        # Обычный режим
-                        output += f": {link}"
+                        output += f": <tg-spoiler>{link}</tg-spoiler>"
+                elif link:
+                    # предмет-посилання замість «голого» URL: рядок стає
+                    # вдвічі коротшим і повідомлення не розпливається
+                    output += f'<a href="{html.escape(link, quote=True)}">{subject}</a> 🔗'
                 else:
+                    output += subject
                     if lesson['subject'] != "——":
                         output += ": —"
                 output += "\n"
@@ -727,9 +727,8 @@ def get_diary_homework(
 
         # ---- форматирование для Telegram (HTML) ----
         if not homework_by_day:
-            return "✅ Д/з не знайдено."
+            return NO_HOMEWORK
 
-        import html
         out = []
         for day, lessons in homework_by_day.items():
             out.append(f"📅 {html.escape(day).capitalize()}")

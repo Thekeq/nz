@@ -15,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+import texts
 from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
 from utils import track_activity, fix_ai_response, user_can_call, compact_num
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
@@ -45,8 +46,7 @@ def _is_vip(user_id: int) -> bool:
 
 
 @router.message(Command('vip'))
-@router.message(F.text == "⭐️ Free VIP")
-@router.message(F.text == "⭐️ VIP")
+@router.message(F.text.in_(texts.VIP_LABELS))
 @router.callback_query(F.data == "vip_menu")
 async def vip_func(event: Union[Message, CallbackQuery]):
     user_id = event.from_user.id
@@ -187,7 +187,7 @@ async def successful_payment(message: Message):
     date_str = "НАЗАВЖДИ :)" if expires == 0 else datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
     await message.answer(
         f"✅ Ви отримали VIP доступ до {date_str}\n"
-        f"💎 На балансі <b>{compact_num(db.get_tokens(user_id))} AI-токенів</b>!\n\n"
+        f"💎 На балансі <b>{compact_num(db.get_tokens(user_id))} ШІ-токенів</b>!\n\n"
         f"🎁 За кожного запрошеного друга — ще +3 дні VIP:\n"
         f"https://t.me/{BOT_USERNAME}?start={user_id}",
         reply_markup=build_vip_kb(),
@@ -201,7 +201,7 @@ async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
 
 
 @router.message(Command("ai"))
-@router.message(F.text == "✨ ШІ")
+@router.message(F.text.in_(texts.AI_LABELS))
 async def ai_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
     exit_kb = InlineKeyboardMarkup(
@@ -231,7 +231,7 @@ async def ai_start(message: Message, state: FSMContext):
             )
         else:
             await message.reply(
-                f"🎁 Безкоштовні AI-запити цього тижня закінчились ({FREE_AI_LIMIT}/{FREE_AI_LIMIT})\n"
+                f"🎁 Безкоштовні ШІ-запити цього тижня закінчились ({FREE_AI_LIMIT}/{FREE_AI_LIMIT})\n"
                 "⭐️ VIP дає <b>1,000,000 токенів</b> — вистачає на сотні запитів!",
                 reply_markup=vip_upsell_kb()
             )
@@ -244,7 +244,7 @@ async def _charge_ai(message: Message, state: FSMContext, user_id: int, is_vip: 
     if db.try_use_free_ai(user_id, FREE_AI_LIMIT):
         return True
     await message.reply(
-        "🎁 Безкоштовні AI-запити цього тижня закінчились.\n"
+        "🎁 Безкоштовні ШІ-запити цього тижня закінчились.\n"
         "⭐️ У VIP — <b>1,000,000 токенів</b> без тижневих лімітів!",
         reply_markup=vip_upsell_kb()
     )
@@ -270,7 +270,7 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
         current_tokens = db.get_tokens(user_id)
         if current_tokens <= 0:
             await message.reply(
-                "❌ У вас закінчилися AI-токени! Поновіть VIP, щоб отримати ще 1 млн.",
+                "❌ У вас закінчилися ШІ-токени! Поновіть VIP, щоб отримати ще 1 млн.",
                 reply_markup=vip_upsell_kb()
             )
             await state.clear()
@@ -358,13 +358,13 @@ async def handle_ai_homework(callback: CallbackQuery):
     if is_vip:
         current_tokens = db.get_tokens(user_id)
         if current_tokens <= 0:
-            await callback.answer("❌ Закінчилися AI-токени!", show_alert=True)
+            await callback.answer("❌ Закінчилися ШІ-токени!", show_alert=True)
             return
     else:
         # не-VIP: порада по ДЗ у рахунок тижневого безкоштовного ліміту
         if not db.try_use_free_ai(user_id, FREE_AI_LIMIT):
             await callback.message.answer(
-                "🎁 Безкоштовні AI-запити цього тижня закінчились.\n"
+                "🎁 Безкоштовні ШІ-запити цього тижня закінчились.\n"
                 "⭐️ VIP дає <b>1,000,000 токенів</b> — порада по ДЗ щодня!",
                 reply_markup=vip_upsell_kb()
             )
@@ -678,7 +678,7 @@ async def leaderboard_cmd(event: Union[Message, CallbackQuery]):
 
 
 @router.message(Command("notify_grades"))
-@router.message(F.text == "🔔 Оцінки (сповіщення)")
+@router.message(F.text.in_(texts.NOTIFY_GRADES_LABELS))
 async def turn_notify_grades(message: Message):
     user_id = message.from_user.id
     track_activity(user_id)
@@ -733,7 +733,7 @@ async def turn_notify_homework(message: Message):
 
 
 @router.message(Command("notify"))
-@router.message(F.text == "⏰ Нагадування уроків")
+@router.message(F.text.in_(texts.NOTIFY_LESSONS_LABELS))
 async def turn_notify(message: Message):
     user_id = message.from_user.id
     track_activity(user_id)

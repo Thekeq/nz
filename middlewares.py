@@ -10,16 +10,20 @@ logger = logging.getLogger(__name__)
 
 BUTTON_LABELS = {
     "Розклад": "diary",
-    "Д/з": "homework",
+    "Д/з": "homework",       # стара підпис кнопки — досі приходить з кешованих клавіатур
+    "ДЗ": "homework",
     "Новини": "news",
-    "Статистика": "grades",
+    "Статистика": "grades",  # стара
+    "Оцінки (сповіщення)": "notify_grades",
+    "Оцінки": "grades",
     "Free VIP": "vip",
-    "Головне меню": "menu",
+    "VIP": "vip",
+    "Головне меню": "help",  # стара
+    "Довідка": "help",
     "Увійти": "login",
     "Показати приклад": "example",
     "ШІ": "ai",
     "Нагадування": "notify_lessons",
-    "Оцінки": "notify_grades",
 }
 
 
