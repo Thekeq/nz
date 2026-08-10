@@ -4,9 +4,27 @@ import re
 import logging
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, db, bot
+from textutils import split_message, CAPTION_LIMIT
 
 logger = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = 5
+
+
+async def answer_long(message, text: str, reply_markup=None, **kwargs):
+    """Відповідає текстом будь-якої довжини, ріжучи на частини.
+
+    Клавіатуру чіпляємо лише до останньої частини, щоб кнопки
+    не дублювались під кожним куском.
+    """
+    parts = split_message(text)
+    for i, part in enumerate(parts):
+        is_last = i == len(parts) - 1
+        await message.answer(
+            part,
+            reply_markup=reply_markup if is_last else None,
+            **kwargs
+        )
+    return len(parts)
 
 
 async def safe_send(

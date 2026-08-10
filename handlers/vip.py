@@ -17,7 +17,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import texts
 from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
-from utils import track_activity, fix_ai_response, user_can_call, compact_num
+from utils import track_activity, fix_ai_response, user_can_call, compact_num, answer_long
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
 from services.ai import ai
@@ -294,7 +294,7 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
             answer += f"\n\n🔄 <i>Щоб задати нове питання — натисни</i> /ai"
             answer += _ai_cost_footer(user_id, is_vip, cost)
 
-            await message.reply(answer, parse_mode="HTML", disable_web_page_preview=True)
+            await answer_long(message, answer, parse_mode="HTML", disable_web_page_preview=True)
 
         except Exception:
             logger.exception("AI text request failed for user_id=%s", user_id)
@@ -330,7 +330,7 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
             answer += "\n\n🔄 <i>Щоб задати нове питання — натисни</i> /ai"
             answer += _ai_cost_footer(user_id, is_vip, cost)
 
-            await message.reply(answer, parse_mode="HTML", disable_web_page_preview=True)
+            await answer_long(message, answer, parse_mode="HTML", disable_web_page_preview=True)
 
         except Exception:
             logger.exception("AI photo request failed for user_id=%s", user_id)
@@ -390,7 +390,7 @@ async def handle_ai_homework(callback: CallbackQuery):
             return
         response_text += "\n" + _ai_cost_footer(user_id, is_vip, cost)
 
-        await callback.message.answer(response_text, parse_mode="HTML")
+        await answer_long(callback.message, response_text, parse_mode="HTML")
 
     except Exception:
         logger.exception("AI homework request failed for user_id=%s", user_id)

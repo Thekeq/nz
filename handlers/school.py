@@ -11,7 +11,8 @@ from quickchart import QuickChart
 
 import texts
 from loader import db, fernet, SEMAPHORE, ADMIN_ID
-from utils import user_can_call, track_activity, process_referral_reward
+from utils import user_can_call, track_activity, process_referral_reward, answer_long
+from textutils import CAPTION_LIMIT
 from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button, result_actions_kb
 from services.diarynz import get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework, \
     InvalidCredentials
@@ -69,11 +70,11 @@ async def get_diary(message: Message, state: FSMContext):
                 if is_vip:
                     keyboard = await keyboard_diary(provider)
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_vip_kb())
-                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=result_actions_kb(user_id, keyboard))
+                    await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
                 else:
                     keyboard = await keyboard_diary(provider)
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_main_kb())
-                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=result_actions_kb(user_id, keyboard))
+                    await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
             else:
                 await message.answer(f"{schedule}")
 
@@ -138,10 +139,10 @@ async def homework_cmd(message: Message, state: FSMContext):
         # Модифікуємо клавіатуру, додаючи кнопку ШІ з актуальним текстом
         final_keyboard = add_ai_button(base_keyboard, text)
 
-        await message.answer(
-            text,
-            parse_mode="HTML",
+        await answer_long(
+            message, text,
             reply_markup=result_actions_kb(user_id, final_keyboard),
+            parse_mode="HTML",
             disable_web_page_preview=True
         )
 
@@ -195,7 +196,7 @@ async def news_command(message: Message, state: FSMContext):
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
                 await process_referral_reward(user_id)
 
-        await message.answer(text, reply_markup=result_actions_kb(user_id))
+        await answer_long(message, text, reply_markup=result_actions_kb(user_id))
     except Exception:
         logger.exception("Failed to get news for user_id=%s", user_id)
         await message.answer("❌ Не вдалося отримати новини. Спробуйте пізніше.", reply_markup=kb_retry)
@@ -303,12 +304,24 @@ async def get_grades(message: Message, state: FSMContext):
 
             if provider == "nz":
                 url = photo_grades(text)
-                await message.answer_photo(photo=url, caption=final_text, parse_mode="HTML", reply_markup=result_actions_kb(user_id))
+                # ліміт підпису до фото — 1024, а не 4096: у кого багато
+                # предметів, підпис не влазить, тому текст іде окремо
+                if len(final_text) <= CAPTION_LIMIT:
+                    await message.answer_photo(
+                        photo=url, caption=final_text, parse_mode="HTML",
+                        reply_markup=result_actions_kb(user_id)
+                    )
+                else:
+                    await message.answer_photo(photo=url, caption="📊 Твоя статистика")
+                    await answer_long(
+                        message, final_text,
+                        reply_markup=result_actions_kb(user_id), parse_mode="HTML"
+                    )
             else:
-                await message.answer(final_text, parse_mode="HTML", reply_markup=result_actions_kb(user_id))
+                await answer_long(message, final_text, reply_markup=result_actions_kb(user_id), parse_mode="HTML")
 
         else:
-            await message.answer(text, reply_markup=result_actions_kb(user_id))
+            await answer_long(message, text, reply_markup=result_actions_kb(user_id))
 
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)

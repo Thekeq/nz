@@ -9,7 +9,7 @@ import texts
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
 from states import SupportStates, AuthStates  # Якщо треба
-from utils import track_activity, user_can_call, safe_send
+from utils import track_activity, user_can_call, safe_send, answer_long
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -241,7 +241,8 @@ async def policy(message: Message):
         "З усіх питань — /support."
     )
 
-    await message.answer(policy_text, parse_mode="HTML")
+    # політика довша за ліміт Telegram — шлемо частинами
+    await answer_long(message, policy_text, parse_mode="HTML")
 
 
 @router.message(Command('support'))
