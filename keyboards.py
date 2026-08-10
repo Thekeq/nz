@@ -3,12 +3,18 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import datetime
 import uuid
 import pytz
-from loader import HW_AI_CACHE
+from loader import BOT_USERNAME, HW_AI_CACHE
 from utils import clean_html
 from urllib.parse import quote
 
 KYIV_TZ = pytz.timezone("Europe/Kiev")
 CANONICAL_DAYS = ["понеділок", "вівторок", "середа", "четвер", "пʼятниця"]
+
+
+def _share_url(user_id: int, description: str) -> str:
+    ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
+    return f"https://t.me/share/url?url={quote(ref_link)}&text={quote(description)}"
+
 
 kb_provider = ReplyKeyboardMarkup(
     keyboard=[
@@ -33,9 +39,11 @@ def build_main_kb() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="📕 Д/з")
             ],
             [
-                KeyboardButton(text="⭐️ Free VIP"),
                 KeyboardButton(text="📊 Статистика"),
                 KeyboardButton(text="📰 Новини")
+            ],
+            [
+                KeyboardButton(text="⭐️ Free VIP")
             ],
             [
                 KeyboardButton(text="ℹ️ Головне меню")
@@ -54,9 +62,12 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="📕 Д/з")
             ],
             [
-                KeyboardButton(text="✨ ШІ"),
                 KeyboardButton(text="📊 Статистика"),
                 KeyboardButton(text="📰 Новини"),
+            ],
+            [
+                KeyboardButton(text="✨ ШІ"),
+                KeyboardButton(text="⭐️ VIP"),
             ],
             [
                 KeyboardButton(text="ℹ️ Головне меню")
@@ -68,10 +79,6 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
 
 
 def share_kb(user_id: int):
-    # 1. Твоє реферальне посилання
-    ref_link = f"https://t.me/nzdiary_bot?start={user_id}"
-
-    # 2. Текст опису (без самого посилання, воно додасться окремо)
     description = (
         "\n📱 Мій шкільний асистент у Telegram\n\n"
         "• Оцінки з NZ.ua та Human\n"
@@ -80,26 +87,71 @@ def share_kb(user_id: int):
         "Спробуй, це зручніше за сайт 👇"
     )
 
-    # 3. Формуємо спеціальне посилання для шерингу
-    # t.me/share/url?url={ПОСИЛАННЯ}&text={ТЕКСТ}
-    share_url = f"https://t.me/share/url?url={quote(ref_link)}&text={quote(description)}"
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="📤 Запросити друга",
-                    url=share_url  # 👈 Використовуємо url, а не switch_inline_query
+                    url=_share_url(user_id, description)
                 )
             ]
         ]
     )
 
 
-def payment_keyboard():
+def invite_friend_kb(user_id: int, label: str = "📤 Поділитися ботом"):
+    description = (
+        "Я користуюсь ботом для NZ.ua/Human: розклад, ДЗ, оцінки, новини і нагадування прямо в Telegram."
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=label, url=_share_url(user_id, description))]
+        ]
+    )
+
+
+def result_actions_kb(user_id: int, base_kb: InlineKeyboardMarkup | None = None):
+    description = (
+        "Зручний бот для школи: розклад, ДЗ, оцінки, новини та нагадування з NZ.ua/Human прямо в Telegram."
+    )
+    rows = [list(row) for row in base_kb.inline_keyboard] if base_kb else []
+    rows.append([
+        InlineKeyboardButton(text="📤 Поділитися ботом", url=_share_url(user_id, description))
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_keyboard(stars: int = 75):
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"Отримати VIP за 50 ⭐️", pay=True)
+    builder.button(text=f"Сплатити {stars} ⭐️", pay=True)
     return builder.as_markup()
+
+
+def vip_plans_kb(user_id: int):
+    description = (
+        "\n📱 Мій шкільний асистент у Telegram\n\n"
+        "• Оцінки з NZ.ua та Human\n"
+        "• Розклад уроків\n"
+        "• Нагадування перед уроком\n\n"
+        "Спробуй, це зручніше за сайт 👇"
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🐣 1 тиждень — 25 ⭐️", callback_data="buy:week")],
+            [InlineKeyboardButton(text="🔥 1 місяць — 75 ⭐️ (популярний)", callback_data="buy:month")],
+            [InlineKeyboardButton(text="💎 3 місяці — 200 ⭐️ (вигідніше)", callback_data="buy:months3")],
+            [InlineKeyboardButton(text="🎁 Безкоштовно: запросити друга", url=_share_url(user_id, description))],
+        ]
+    )
+
+
+def vip_upsell_kb():
+    """Кнопка під пейволом: веде одразу до тарифів, а не в глухий кут."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⭐️ Отримати VIP", callback_data="vip_menu")]
+        ]
+    )
 
 
 def get_styles_kb():

@@ -1,11 +1,27 @@
 import re
+import logging
+import json
+import threading
+import functools
+import inspect
+import time
+from contextlib import contextmanager
+from concurrent.futures import Future
 from collections import defaultdict
-from typing import Tuple, Dict, Any
 from urllib.parse import urljoin
 import hashlib
 import cloudscraper
+import requests
 from bs4 import BeautifulSoup
 import datetime
+
+logger = logging.getLogger(__name__)
+_SESSION_LOCKS: dict[int, threading.RLock] = {}
+_SESSION_LOCKS_GUARD = threading.Lock()
+_SCRAPER_CACHE: dict[int, dict] = {}
+_SCRAPER_CACHE_TTL = 20 * 60
+_INFLIGHT_CALLS: dict[tuple, Future] = {}
+_INFLIGHT_GUARD = threading.Lock()
 
 
 class InvalidCredentials(Exception):
@@ -18,6 +34,13 @@ LINK_PRIORITIES = [
 ]
 
 BASE = "https://nz.ua"
+
+DEFAULT_HEADERS = {
+    "X-Requested-With": "XMLHttpRequest",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Referer": "https://nz.ua/",
+    "Origin": "https://nz.ua",
+}
 
 
 def pick_best_link(box):
@@ -38,59 +61,433 @@ def pick_best_link(box):
     return links[0]
 
 
-def get_diary_schedule(login: str, password: str, days: list[str] | None = None, is_tiktok_mode: bool = False) -> str:
-    scraper = cloudscraper.create_scraper()
+def _dump_cookies(scraper) -> str:
+    cookies = []
+    for cookie in scraper.cookies:
+        rest = {}
+        for key, value in (getattr(cookie, "_rest", {}) or {}).items():
+            if value is None or isinstance(value, (str, int, float, bool)):
+                rest[str(key)] = value
+            else:
+                rest[str(key)] = str(value)
+
+        cookies.append({
+            "name": cookie.name,
+            "value": cookie.value,
+            "domain": cookie.domain or "",
+            "path": cookie.path or "/",
+            "secure": bool(cookie.secure),
+            "expires": cookie.expires,
+            "rest": rest,
+        })
+
+    payload = {
+        "version": 2,
+        "user_agent": scraper.headers.get("User-Agent"),
+        "cookies": sorted(cookies, key=lambda c: (c["domain"], c["path"], c["name"])),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _load_cookies(scraper, raw_cookies: str):
+    payload = json.loads(raw_cookies)
+
+    if isinstance(payload, dict) and isinstance(payload.get("cookies"), list):
+        user_agent = payload.get("user_agent")
+        if user_agent:
+            scraper.headers.update({"User-Agent": user_agent})
+
+        scraper.cookies.clear()
+        for item in payload["cookies"]:
+            name = item.get("name")
+            value = item.get("value")
+            if not name or value is None:
+                continue
+
+            cookie = requests.cookies.create_cookie(
+                name=name,
+                value=value,
+                domain=item.get("domain") or "",
+                path=item.get("path") or "/",
+                secure=bool(item.get("secure")),
+                expires=item.get("expires"),
+                rest=item.get("rest") or {},
+            )
+            scraper.cookies.set_cookie(cookie)
+        return
+
+    # Legacy format: {"PHPSESSID": "...", ...}
+    if isinstance(payload, dict):
+        scraper.cookies.update(payload)
+
+
+def _session_signature(raw_cookies: str):
     try:
-        # ... [Тут весь твой код логина и получения CSRF без изменений] ...
-        # 1. Отримуємо CSRF
-        r = scraper.get("https://nz.ua/", timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        csrf_tag = soup.find("input", {"name": "_csrf"})
-        if not csrf_tag:
-            return "Не удалось получить CSRF токен."
-        csrf = csrf_tag["value"]
+        payload = json.loads(raw_cookies)
+    except (TypeError, ValueError):
+        return None
 
-        # 2. Логін
-        data = {
-            '_csrf': csrf,
-            'LoginForm[login]': login,
-            'LoginForm[password]': password,
-            'LoginForm[rememberMe]': ['0', '1'],
-            'ajax': 'login-form',
-            'login-button': 'undefined',
-        }
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Referer": "https://nz.ua/",
-            "Origin": "https://nz.ua",
-        }
+    if isinstance(payload, dict) and isinstance(payload.get("cookies"), list):
+        cookies = [
+            (
+                item.get("domain") or "",
+                item.get("path") or "/",
+                item.get("name"),
+                item.get("value"),
+                bool(item.get("secure")),
+                item.get("expires"),
+                tuple(sorted((item.get("rest") or {}).items())),
+            )
+            for item in payload["cookies"]
+            if item.get("name")
+        ]
+        return payload.get("user_agent"), tuple(sorted(cookies))
 
-        resp_val = scraper.post("https://nz.ua/login", data=data, headers=headers)
+    if isinstance(payload, dict):
+        return None, tuple(sorted(payload.items()))
+
+    return None
+
+
+def _record_nz_event(db, event: str):
+    if not db:
+        return
+    try:
+        db.record_nz_session_event(event)
+    except Exception:
+        logger.exception("Failed to record NZ session metric event=%s", event)
+
+
+def _get_session_lock(user_id: int) -> threading.RLock:
+    with _SESSION_LOCKS_GUARD:
+        lock = _SESSION_LOCKS.get(user_id)
+        if lock is None:
+            lock = threading.RLock()
+            _SESSION_LOCKS[user_id] = lock
+        return lock
+
+
+@contextmanager
+def _user_session_scope(user_id: int | None):
+    if user_id is None:
+        yield
+        return
+
+    lock = _get_session_lock(user_id)
+    with lock:
+        yield
+
+
+def _with_user_session_lock(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        user_id = kwargs.get("user_id")
+        if user_id is None:
+            try:
+                user_id = inspect.signature(func).bind_partial(*args, **kwargs).arguments.get("user_id")
+            except TypeError:
+                user_id = None
+
+        with _user_session_scope(user_id):
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+def _get_scraper(user_id: int | None):
+    if user_id is None:
+        return cloudscraper.create_scraper(), False
+
+    now = time.time()
+    with _SESSION_LOCKS_GUARD:
+        item = _SCRAPER_CACHE.get(user_id)
+        if item and now - item["last_used"] <= _SCRAPER_CACHE_TTL:
+            item["last_used"] = now
+            return item["scraper"], True
+
+        if item:
+            try:
+                item["scraper"].close()
+            except Exception:
+                pass
+
+        scraper = cloudscraper.create_scraper()
+        _SCRAPER_CACHE[user_id] = {"scraper": scraper, "last_used": now}
+        return scraper, False
+
+
+def _release_scraper(user_id: int | None, scraper, keep: bool):
+    if keep:
+        if user_id is not None:
+            with _SESSION_LOCKS_GUARD:
+                item = _SCRAPER_CACHE.get(user_id)
+                if item and item.get("scraper") is scraper:
+                    item["last_used"] = time.time()
+        return
+    scraper.close()
+
+
+def clear_user_session_cache(user_id: int):
+    with _SESSION_LOCKS_GUARD:
+        item = _SCRAPER_CACHE.pop(user_id, None)
+    if item:
+        try:
+            item["scraper"].close()
+        except Exception:
+            pass
+
+
+def cleanup_session_cache(max_idle: int = _SCRAPER_CACHE_TTL):
+    now = time.time()
+    expired = []
+    with _SESSION_LOCKS_GUARD:
+        for user_id, item in list(_SCRAPER_CACHE.items()):
+            if now - item["last_used"] > max_idle:
+                expired.append((user_id, item))
+                _SCRAPER_CACHE.pop(user_id, None)
+
+    for _, item in expired:
+        try:
+            item["scraper"].close()
+        except Exception:
+            pass
+
+
+def _dedupe_key(func, args: tuple, kwargs: dict):
+    user_id = kwargs.get("user_id")
+    try:
+        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        arguments = dict(bound.arguments)
+        user_id = user_id if user_id is not None else arguments.get("user_id")
+        arguments.pop("password", None)
+        arguments.pop("db", None)
+        arguments.pop("fernet", None)
+        stable_args = tuple(sorted((key, repr(value)) for key, value in arguments.items()))
+        return func.__name__, user_id, stable_args
+    except Exception:
+        pass
+
+    stable_kwargs = tuple(sorted(
+        (key, repr(value))
+        for key, value in kwargs.items()
+        if key not in {"password", "db", "fernet"}
+    ))
+    safe_args = args[:1] + args[2:]
+    return func.__name__, user_id, repr(safe_args), stable_kwargs
+
+
+def _dedupe_call(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        key = _dedupe_key(func, args, kwargs)
+        with _INFLIGHT_GUARD:
+            future = _INFLIGHT_CALLS.get(key)
+            if future is None:
+                future = Future()
+                _INFLIGHT_CALLS[key] = future
+                owner = True
+            else:
+                owner = False
+
+        if not owner:
+            return future.result()
+
+        try:
+            value = func(*args, **kwargs)
+            future.set_result(value)
+            return value
+        except Exception as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with _INFLIGHT_GUARD:
+                _INFLIGHT_CALLS.pop(key, None)
+
+    return wrapper
+
+
+def _is_login_page(soup: BeautifulSoup) -> bool:
+    return bool(
+        soup.find("input", {"name": "_csrf"})
+        and (
+            soup.find("input", {"name": "LoginForm[login]"})
+            or soup.find("input", {"name": "LoginForm[password]"})
+            or soup.find("form", id="login-form")
+        )
+    )
+
+
+def _session_looks_authorized(soup: BeautifulSoup) -> bool:
+    if _is_login_page(soup):
+        return False
+    return bool(
+        soup.select_one(".diary-item")
+        or soup.select_one("table.marks-report")
+        or soup.find("div", id="school-news-list")
+        or soup.find("select", {"id": "personalselectform-semester_id"})
+    )
+
+
+def _login_nz(scraper, login: str, password: str):
+    r = scraper.get("https://nz.ua/", timeout=10)
+    soup = BeautifulSoup(r.text, "html.parser")
+    csrf_tag = soup.find("input", {"name": "_csrf"})
+    if not csrf_tag:
+        raise RuntimeError("Не удалось получить CSRF токен.")
+    csrf = csrf_tag["value"]
+
+    data = {
+        "_csrf": csrf,
+        "LoginForm[login]": login,
+        "LoginForm[password]": password,
+        "LoginForm[rememberMe]": ["0", "1"],
+        "ajax": "login-form",
+        "login-button": "undefined",
+    }
+
+    resp_val = scraper.post("https://nz.ua/login", data=data, headers=DEFAULT_HEADERS, timeout=10)
+    try:
         j = resp_val.json()
-        if j:
-            msg = (j.get("loginform-password") or j.get("loginform-login") or ["Сталася невідома помилка"])[0]
-            raise Exception(msg)
+    except ValueError:
+        j = {}
+    if j:
+        msg = (j.get("loginform-password") or j.get("loginform-login") or ["Сталася невідома помилка"])[0]
+        raise InvalidCredentials(msg)
 
-        # 3. Отримуємо розклад
-        scraper.post("https://nz.ua/login", data=data)
-        diary_resp = scraper.get("https://nz.ua/schedule/diary")
-        soup = BeautifulSoup(diary_resp.text, "html.parser")
+    scraper.post("https://nz.ua/login", data=data, timeout=10)
 
-        # --- ЛОГІКА ВИБОРУ ПОТОЧНОГО СЕМЕСТРУ ---
-        semester_select = soup.find("select", {"id": "personalselectform-semester_id"})
-        if semester_select:
-            current_option = semester_select.find("option", string=lambda text: text and "(поточний)" in text)
-            if current_option:
-                current_sem_id = current_option.get("value")
-                scraper.post("https://nz.ua/site/semester-change", data={"_csrf": csrf, "semester_id": current_sem_id},
-                             headers=headers)
-                diary_resp = scraper.get("https://nz.ua/schedule/diary")
-                soup = BeautifulSoup(diary_resp.text, "html.parser")
-        # -----------------------------------------------
+
+def _extract_csrf(soup: BeautifulSoup, scraper=None) -> str | None:
+    csrf_tag = soup.find("input", {"name": "_csrf"})
+    if csrf_tag and csrf_tag.get("value"):
+        return csrf_tag["value"]
+
+    meta_tag = soup.find("meta", {"name": "csrf-token"})
+    if meta_tag and meta_tag.get("content"):
+        return meta_tag["content"]
+
+    if scraper:
+        resp = scraper.get("https://nz.ua/", timeout=10)
+        root_soup = BeautifulSoup(resp.text, "html.parser")
+        return _extract_csrf(root_soup)
+
+    return None
+
+
+def _selected_semester_id(select_box) -> str | None:
+    selected_option = select_box.find("option", selected=True)
+    return selected_option.get("value") if selected_option else None
+
+
+def _current_semester_id(select_box) -> str | None:
+    current_option = select_box.find("option", string=lambda text: text and "(поточний)" in text)
+    return current_option.get("value") if current_option else None
+
+
+def _change_semester(scraper, csrf: str, semester_id: str):
+    scraper.post(
+        f"{BASE}/site/semester-change",
+        data={"_csrf": csrf, "semester_id": semester_id},
+        headers=DEFAULT_HEADERS,
+        timeout=10,
+    )
+
+
+def _ensure_current_semester(scraper, soup: BeautifulSoup, url: str, params: dict | None = None):
+    semester_select = soup.find("select", {"id": "personalselectform-semester_id"})
+    if not semester_select:
+        return soup
+
+    current_sem_id = _current_semester_id(semester_select)
+    if not current_sem_id or _selected_semester_id(semester_select) == current_sem_id:
+        return soup
+
+    csrf = _extract_csrf(soup, scraper)
+    if not csrf:
+        return None
+
+    _change_semester(scraper, csrf, current_sem_id)
+    resp = scraper.get(url, params=params, timeout=10)
+    return BeautifulSoup(resp.text, "html.parser")
+
+
+def _open_authorized_page(
+        scraper,
+        user_id: int | None,
+        login: str,
+        password: str,
+        db=None,
+        fernet=None,
+        url: str = "https://nz.ua/schedule/diary",
+        params: dict | None = None,
+):
+    def save_current_cookies(previous_raw_cookies: str | None = None):
+        if user_id is not None and db and fernet:
+            raw_cookies = _dump_cookies(scraper)
+            if previous_raw_cookies and _session_signature(previous_raw_cookies) == _session_signature(raw_cookies):
+                return
+
+            encrypted_cookies = fernet.encrypt(raw_cookies.encode()).decode()
+            db.set_session_cookies(user_id, "nz", encrypted_cookies)
+
+    if user_id is not None and db and fernet:
+        encrypted = db.get_session_cookies(user_id, "nz")
+        if encrypted:
+            try:
+                raw_cookies = fernet.decrypt(encrypted.encode()).decode()
+                _load_cookies(scraper, raw_cookies)
+                resp = scraper.get(url, params=params, timeout=10)
+                soup = BeautifulSoup(resp.text, "html.parser")
+                if _session_looks_authorized(soup):
+                    save_current_cookies(raw_cookies)
+                    _record_nz_event(db, "cookie_reuse")
+                    logger.debug("Reused NZ session cookies for user_id=%s", user_id)
+                    return resp, soup
+                logger.debug("Stored NZ session cookies are expired for user_id=%s", user_id)
+                _record_nz_event(db, "cookie_expired")
+                db.delete_session_cookies(user_id, "nz")
+            except Exception:
+                logger.exception("Failed to reuse NZ session cookies for user_id=%s", user_id)
+                _record_nz_event(db, "cookie_error")
+                db.delete_session_cookies(user_id, "nz")
+
+    logger.debug("Logging in to NZ for user_id=%s", user_id)
+    _record_nz_event(db, "login")
+    _login_nz(scraper, login, password)
+
+    resp = scraper.get(url, params=params, timeout=10)
+    soup = BeautifulSoup(resp.text, "html.parser")
+    if _session_looks_authorized(soup):
+        save_current_cookies()
+        logger.debug("Saved fresh NZ session cookies for user_id=%s", user_id)
+    return resp, soup
+
+
+@_dedupe_call
+@_with_user_session_lock
+def get_diary_schedule(
+        login: str,
+        password: str,
+        days: list[str] | None = None,
+        is_tiktok_mode: bool = False,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
+    try:
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url="https://nz.ua/schedule/diary"
+        )
+
+        soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
+        if soup is None:
+            return "Не удалось получить CSRF токен."
 
         diary_items = soup.select(".diary-item")
-        if days is None: days = ["сьогодні", "завтра"]
+        if days is None:
+            days = ["сьогодні", "завтра"]
         schedule_by_day = {}
 
         def extract_date_text(txt):
@@ -148,7 +545,7 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None,
                 href = next_link_tag.get("href") if next_link_tag else None
                 if href:
                     next_url = urljoin("https://nz.ua", href)
-                    next_resp = scraper.get(next_url)
+                    next_resp = scraper.get(next_url, timeout=10)
                     next_soup = BeautifulSoup(next_resp.text, "html.parser")
                     next_items = next_soup.select(".diary-item")
                     if next_items:
@@ -216,7 +613,7 @@ def get_diary_schedule(login: str, password: str, days: list[str] | None = None,
     except Exception as e:
         raise e
     finally:
-        scraper.close()
+        _release_scraper(user_id, scraper, keep=user_id is not None)
 
 
 HW_RE = re.compile(r"Д\s*/\s*[зz]\s*:\s*(.*)", re.IGNORECASE | re.DOTALL)
@@ -257,47 +654,29 @@ def extract_hw_link(box) -> str | None:
     return href
 
 
-def get_diary_homework(login: str, password: str, days: list[str] | None = None) -> str:
-    scraper = cloudscraper.create_scraper()
+@_dedupe_call
+@_with_user_session_lock
+def get_diary_homework(
+        login: str,
+        password: str,
+        days: list[str] | None = None,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
-        # 1) CSRF
-        r = scraper.get("https://nz.ua/", timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        csrf_tag = soup.find("input", {"name": "_csrf"})
-        if not csrf_tag:
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url="https://nz.ua/schedule/diary"
+        )
+        soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
+        if soup is None:
             return "Не удалось получить CSRF токен."
-        csrf = csrf_tag["value"]
-
-        # 2) Логин (ajax-проверка как у тебя)
-        data = {
-            "_csrf": csrf,
-            "LoginForm[login]": login,
-            "LoginForm[password]": password,
-            "LoginForm[rememberMe]": ["0", "1"],
-            "ajax": "login-form",
-            "login-button": "undefined",
-        }
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Referer": "https://nz.ua/",
-            "Origin": "https://nz.ua",
-        }
-
-        resp_val = scraper.post("https://nz.ua/login", data=data, headers=headers)
-        j = resp_val.json()
-        if j:
-            msg = (j.get("loginform-password") or j.get("loginform-login") or ["Сталася невідома помилка"])[0]
-            raise InvalidCredentials(msg)
-
-        # 3) Получаем дневник
-        resp = scraper.post("https://nz.ua/login", data=data)
-        diary_resp = scraper.get("https://nz.ua/schedule/diary")
-        soup = BeautifulSoup(diary_resp.text, "html.parser")
         diary_items = soup.select(".diary-item")
 
         if days is None:
-            days = "сьогодні"
+            days = ["сьогодні"]
 
         homework_by_day: dict[str, list[dict]] = {}
 
@@ -362,40 +741,31 @@ def get_diary_homework(login: str, password: str, days: list[str] | None = None)
     except Exception as e:
         raise e
     finally:
-        scraper.close()
+        _release_scraper(user_id, scraper, keep=user_id is not None)
 
 
-def get_diary_grades(login: str, password: str, days_back: int = None) -> tuple[dict[str, float | None], str]:
-    scraper = cloudscraper.create_scraper()
+@_dedupe_call
+@_with_user_session_lock
+def get_diary_grades(
+        login: str,
+        password: str,
+        days_back: int = None,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> tuple[dict[str, float | None], str]:
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
-        # --- 1. ЛОГИН ---
-        r = scraper.get("https://nz.ua/", timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        csrf_tag = soup.find("input", {"name": "_csrf"})
-        if not csrf_tag:
-            return {}, "Не удалось получить CSRF токен."
-        csrf = csrf_tag["value"]
-
-        data = {
-            '_csrf': csrf,
-            'LoginForm[login]': login,
-            'LoginForm[password]': password,
-            'LoginForm[rememberMe]': ['0', '1'],
-            'ajax': 'login-form',
-            'login-button': 'undefined',
-        }
-
-        resp = scraper.post("https://nz.ua/login", data=data)
-        if resp.url != "https://nz.ua/":
-            return {}, "Неверный логин или пароль, либо капча."
-
-        # --- 2. ПОЛУЧАЕМ СПИСОК СЕМЕСТРОВ ---
+        # --- 1. ПОЛУЧАЕМ СПИСОК СЕМЕСТРОВ ---
         grades_url = "https://nz.ua/schedule/grades-statement"
 
-        # Делаем первый заход, чтобы получить список семестров
-        initial_resp = scraper.get(grades_url)
-        soup = BeautifulSoup(initial_resp.text, "html.parser")
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url=grades_url
+        )
+        soup = _ensure_current_semester(scraper, soup, grades_url)
+        if soup is None:
+            return {}, "Не удалось получить CSRF токен."
 
         # Ищем выпадающий список семестров
         select_box = soup.find("select", {"id": "personalselectform-semester_id"})
@@ -435,56 +805,55 @@ def get_diary_grades(login: str, password: str, days_back: int = None) -> tuple[
 
         # Ищем CSRF токен конкретно для формы смены семестра (он может отличаться)
         semester_form = soup.find("form", {"id": "semester-select-form"})
-        semester_csrf = csrf  # фоллбек
+        semester_csrf = _extract_csrf(soup, scraper)
         if semester_form:
             csrf_input = semester_form.find("input", {"name": "_csrf"})
             if csrf_input:
                 semester_csrf = csrf_input["value"]
+        if not semester_csrf:
+            return {}, "Не удалось получить CSRF токен."
 
-        # Проходимся по каждому семестру года (1-й и 2-й)
-        for sem_id in target_semester_ids:
-            # А. Меняем семестр на сервере
-            change_data = {
-                '_csrf': semester_csrf,
-                'semester_id': sem_id
-            }
-            # Важно: это POST запрос, он просто меняет состояние сессии
-            scraper.post('https://nz.ua/site/semester-change', data=change_data)
+        original_semester_id = _selected_semester_id(select_box)
 
-            # Б. Загружаем страницу оценок для ЭТОГО семестра
-            # Если нужны days_back, параметры добавляем, но для общего среднего лучше брать всё
-            params = {}
-            if days_back is not None:
-                # Если пользователь хочет фильтр по датам, применяем его
-                now = datetime.datetime.now()
-                date_to_str = now.strftime("%Y-%m-%d")
-                date_from_str = (now - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
-                params = {"date_from": date_from_str, "date_to": date_to_str}
+        try:
+            # Проходимся по каждому семестру года (1-й и 2-й)
+            for sem_id in target_semester_ids:
+                _change_semester(scraper, semester_csrf, sem_id)
 
-            # Делаем GET запрос уже с новым семестром
-            diary_resp = scraper.get(grades_url, params=params)
-            sem_soup = BeautifulSoup(diary_resp.text, "html.parser")
+                # Загружаем страницу оценок для этого семестра.
+                params = {}
+                if days_back is not None:
+                    now = datetime.datetime.now()
+                    date_to_str = now.strftime("%Y-%m-%d")
+                    date_from_str = (now - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
+                    params = {"date_from": date_from_str, "date_to": date_to_str}
 
-            table = sem_soup.select_one("table.marks-report tbody")
-            if not table:
-                continue
+                diary_resp = scraper.get(grades_url, params=params, timeout=10)
+                sem_soup = BeautifulSoup(diary_resp.text, "html.parser")
 
-            for tr in table.select("tr"):
-                tds = tr.find_all("td")
-                if len(tds) < 3:
+                table = sem_soup.select_one("table.marks-report tbody")
+                if not table:
                     continue
 
-                # Имя предмета
-                subj = tds[1].get_text(strip=True)
-                # Строка оценок
-                results_text = tds[2].get_text(" ", strip=True)
+                for tr in table.select("tr"):
+                    tds = tr.find_all("td")
+                    if len(tds) < 3:
+                        continue
 
-                # Парсим числа
-                nums = re.findall(r"\b\d{1,2}\b", results_text)
-                nums = [int(n) for n in nums]
+                    subj = tds[1].get_text(strip=True)
+                    results_text = tds[2].get_text(" ", strip=True)
 
-                if nums:
-                    all_grades_data[subj].extend(nums)
+                    nums = re.findall(r"\b\d{1,2}\b", results_text)
+                    nums = [int(n) for n in nums]
+
+                    if nums:
+                        all_grades_data[subj].extend(nums)
+        finally:
+            if original_semester_id:
+                try:
+                    _change_semester(scraper, semester_csrf, original_semester_id)
+                except Exception:
+                    logger.exception("Failed to restore NZ semester after grades fetch")
 
         # --- 4. РАСЧЕТ ИТОГОВОГО СРЕДНЕГО ---
 
@@ -513,40 +882,32 @@ def get_diary_grades(login: str, password: str, days_back: int = None) -> tuple[
         return final_averages, formatted
 
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception("Failed to get NZ grades")
         return {}, f"Помилка отримання даних: {e}"
     finally:
-        scraper.close()
+        _release_scraper(user_id, scraper, keep=user_id is not None)
 
 
-def get_grade_events(login: str, password: str, limit: int = 20) -> list[dict]:
+@_dedupe_call
+@_with_user_session_lock
+def get_grade_events(
+        login: str,
+        password: str,
+        limit: int = 20,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> list[dict]:
     """
     Возвращает список событий-оценок из /dashboard/news
     [{'name','date','text','hash'}, ...] (свежие сверху)
     """
-    scraper = cloudscraper.create_scraper()
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
-        r = scraper.get("https://nz.ua/", timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        csrf_tag = soup.find("input", {"name": "_csrf"})
-        if not csrf_tag:
-            return []
-        csrf = csrf_tag["value"]
-
-        data = {
-            "_csrf": csrf,
-            "LoginForm[login]": login,
-            "LoginForm[password]": password,
-            "LoginForm[rememberMe]": ["0", "1"],
-            "ajax": "login-form",
-            "login-button": "undefined",
-        }
-        resp = scraper.post("https://nz.ua/login", data=data)
-        if resp.url != "https://nz.ua/":
-            return []
-
-        news_resp = scraper.get("https://nz.ua/dashboard/news")
-        soup = BeautifulSoup(news_resp.text, "html.parser")
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url="https://nz.ua/dashboard/news"
+        )
 
         root = soup.find("div", id="school-news-list")
         if not root:
@@ -586,38 +947,27 @@ def get_grade_events(login: str, password: str, limit: int = 20) -> list[dict]:
     except Exception as e:
         raise e
     finally:
-        scraper.close()
+        _release_scraper(user_id, scraper, keep=user_id is not None)
 
 
 # diarynz.py
 
-def get_diary_news(login: str, password: str, limit: int = 10) -> str:
-    scraper = cloudscraper.create_scraper()
+@_dedupe_call
+@_with_user_session_lock
+def get_diary_news(
+        login: str,
+        password: str,
+        limit: int = 10,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    scraper, cached_scraper = _get_scraper(user_id)
+    _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
-        # 1) CSRF
-        r = scraper.get("https://nz.ua/", timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        csrf_tag = soup.find("input", {"name": "_csrf"})
-        if not csrf_tag:
-            return "Не удалось получить CSRF токен."
-        csrf = csrf_tag["value"]
-
-        # 2) Логин
-        data = {
-            "_csrf": csrf,
-            "LoginForm[login]": login,
-            "LoginForm[password]": password,
-            "LoginForm[rememberMe]": ["0", "1"],
-            "ajax": "login-form",
-            "login-button": "undefined",
-        }
-        resp = scraper.post("https://nz.ua/login", data=data)
-        if resp.url != "https://nz.ua/":
-            return "Не удалось войти. Проверьте логин и пароль."
-
-        # 3) Страница новин
-        news_resp = scraper.get("https://nz.ua/dashboard/news")
-        soup = BeautifulSoup(news_resp.text, "html.parser")
+        _, soup = _open_authorized_page(
+            scraper, user_id, login, password, db=db, fernet=fernet, url="https://nz.ua/dashboard/news"
+        )
 
         root = soup.find("div", id="school-news-list")
         if not root:
@@ -662,4 +1012,4 @@ def get_diary_news(login: str, password: str, limit: int = 10) -> str:
     except Exception as e:
         raise e
     finally:
-        scraper.close()
+        _release_scraper(user_id, scraper, keep=user_id is not None)

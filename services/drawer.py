@@ -1,5 +1,9 @@
 import io
+import os
+import logging
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
 
 # --- НАЛАШТУВАННЯ СТИЛІВ ---
 THEMES = {
@@ -120,8 +124,8 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
                 icon_y = y + (text_h - icon_size) // 2
                 img.paste(icon, (x, icon_y), icon)
                 draw.text((x + icon_size + gap, y), text, font=font, fill=color)
-            except Exception as e:
-                print(f"Icon error: {e}")
+            except Exception:
+                logger.exception("Failed to draw icon %s", icon_path)
                 x = (W - text_w) // 2
                 draw.text((x, y), text, font=font, fill=color)
         else:
@@ -165,7 +169,8 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
     draw_centered_text(1370, top_subject, font_med, color=theme["text_color"])
 
     # Footer
-    footer_text = "Згенеровано у @nzdiary_bot"
+    bot_username = os.getenv("BOT_USERNAME", "nzdiary_bot").lstrip("@")
+    footer_text = f"Згенеровано у @{bot_username}"
     if is_vip:
         footer_text = "NZ Diary Premium"
 

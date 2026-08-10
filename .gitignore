@@ -1,6 +1,9 @@
 # env & secrets
 .env
 *.db
+data.db-shm
+data.db-wal
+backups/
 
 migrate.py
 
@@ -29,3 +32,7 @@ ENV/
 # Byte-compiled / cache
 *.egg-info/
 .cache/
+
+#codex
+tests/
+.agents/

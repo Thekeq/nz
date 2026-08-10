@@ -1,6 +1,7 @@
 import asyncio
 import time
 import re
+import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -10,13 +11,14 @@ from quickchart import QuickChart
 
 from loader import db, fernet, SEMAPHORE, ADMIN_ID
 from utils import user_can_call, track_activity, process_referral_reward
-from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button
+from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button, result_actions_kb
 from services.diarynz import get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework, \
     InvalidCredentials
 from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human, get_diary_news_human, \
     get_diary_grades_human
 
 router = Router()
+logger = logging.getLogger(__name__)
 GRADE_LINE_RE = re.compile(
     r"^(.+?):\s*([0-9]+(?:\.[0-9]+)?)\s*\((\d+)\s+оцін", re.IGNORECASE
 )
@@ -49,7 +51,15 @@ async def get_diary(message: Message, state: FSMContext):
                 if provider == "human":
                     schedule = await asyncio.to_thread(get_diary_schedule_human, login, password)
                 else:
-                    schedule = await asyncio.to_thread(get_diary_schedule, login, password, is_tiktok_mode=is_tiktok)
+                    schedule = await asyncio.to_thread(
+                        get_diary_schedule,
+                        login,
+                        password,
+                        is_tiktok_mode=is_tiktok,
+                        user_id=user_id,
+                        db=db,
+                        fernet=fernet
+                    )
                 if schedule:  # или другой признак “ок”
                     db.set_creds_verified(user_id, 1)
                     # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -62,19 +72,19 @@ async def get_diary(message: Message, state: FSMContext):
                 if is_vip:
                     keyboard = await keyboard_diary(provider)
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_vip_kb())
-                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=keyboard)
+                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=result_actions_kb(user_id, keyboard))
                 else:
                     keyboard = await keyboard_diary(provider)
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_main_kb())
-                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=keyboard)
+                    await message.answer(f"{schedule}", disable_web_page_preview=True, reply_markup=result_actions_kb(user_id, keyboard))
             else:
                 await message.answer(f"{schedule}")
 
         except InvalidCredentials as e:
             await message.answer(f"❌ {e}", reply_markup=kb_retry)
 
-        except Exception as e:
-            print(e)
+        except Exception:
+            logger.exception("Failed to get diary for user_id=%s", user_id)
             await message.answer(
                 "❌ Сталася помилка. Спробуйте пізніше.",
                 reply_markup=kb_retry
@@ -114,7 +124,14 @@ async def homework_cmd(message: Message, state: FSMContext):
             if provider == "human":
                 text = await asyncio.to_thread(get_diary_homework_human, login, password)
             else:
-                text = await asyncio.to_thread(get_diary_homework, login, password)
+                text = await asyncio.to_thread(
+                    get_diary_homework,
+                    login,
+                    password,
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
 
             if text:
                 db.set_creds_verified(user_id, 1)
@@ -127,7 +144,7 @@ async def homework_cmd(message: Message, state: FSMContext):
         await message.answer(
             text,
             parse_mode="HTML",
-            reply_markup=final_keyboard,  # Відправляємо вже з кнопкою ШІ
+            reply_markup=result_actions_kb(user_id, final_keyboard),
             disable_web_page_preview=True
         )
 
@@ -166,13 +183,21 @@ async def news_command(message: Message, state: FSMContext):
             if provider == "human":
                 text = await asyncio.to_thread(get_diary_news_human, login, password, 10)
             else:
-                text = await asyncio.to_thread(get_diary_news, login, password, 10)
+                text = await asyncio.to_thread(
+                    get_diary_news,
+                    login,
+                    password,
+                    10,
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
             if text:
                 db.set_creds_verified(user_id, 1)
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
                 await process_referral_reward(user_id)
 
-        await message.answer(text)
+        await message.answer(text, reply_markup=result_actions_kb(user_id))
     except Exception as e:
         await message.answer(f"❌ Помилка при отриманні новин: {e}")
 
@@ -259,7 +284,14 @@ async def get_grades(message: Message, state: FSMContext):
             if provider == "human":
                 text = await asyncio.to_thread(get_diary_grades_human, login, password)
             else:
-                grades, text = await asyncio.to_thread(get_diary_grades, login, password)
+                grades, text = await asyncio.to_thread(
+                    get_diary_grades,
+                    login,
+                    password,
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
 
         # перевіряємо VIP
         vip_flag, expires = db.get_vip_status(user_id)
@@ -272,18 +304,18 @@ async def get_grades(message: Message, state: FSMContext):
 
             if provider == "nz":
                 url = photo_grades(text)
-                await message.answer_photo(photo=url, caption=final_text, parse_mode="HTML")
+                await message.answer_photo(photo=url, caption=final_text, parse_mode="HTML", reply_markup=result_actions_kb(user_id))
             else:
-                await message.answer(final_text, parse_mode="HTML")
+                await message.answer(final_text, parse_mode="HTML", reply_markup=result_actions_kb(user_id))
 
         else:
-            await message.answer(text)
+            await message.answer(text, reply_markup=result_actions_kb(user_id))
 
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)
 
-    except Exception as e:
-        print(e)
+    except Exception:
+        logger.exception("Failed to get grades for user_id=%s", user_id)
         await message.answer(
             "❌ Сталася помилка. Спробуйте пізніше.",
             reply_markup=kb_retry
@@ -321,7 +353,15 @@ async def diary_day_selected(callback: CallbackQuery):
             if provider == "human":
                 schedule = await asyncio.to_thread(get_diary_schedule_human, login, password, days=[day])
             else:
-                schedule = await asyncio.to_thread(get_diary_schedule, login, password, days=[day])
+                schedule = await asyncio.to_thread(
+                    get_diary_schedule,
+                    login,
+                    password,
+                    days=[day],
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
             if schedule:
                 db.set_creds_verified(user_id, 1)
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -336,7 +376,7 @@ async def diary_day_selected(callback: CallbackQuery):
         await callback.message.answer(f"📅 Розклад на {day} не знайдено або сталася помилка.")
     else:
         try:
-            await callback.message.edit_text(f"{schedule}", reply_markup=keyboard, parse_mode="HTML",
+            await callback.message.edit_text(f"{schedule}", reply_markup=result_actions_kb(user_id, keyboard), parse_mode="HTML",
                                              disable_web_page_preview=True)
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -372,7 +412,15 @@ async def diary_hw_selected(callback: CallbackQuery):
             if provider == "human":
                 schedule = await asyncio.to_thread(get_diary_homework_human, login, password, mode=day)
             else:
-                schedule = await asyncio.to_thread(get_diary_homework, login, password, days=[day])
+                schedule = await asyncio.to_thread(
+                    get_diary_homework,
+                    login,
+                    password,
+                    days=[day],
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
 
     except Exception as e:
         await callback.message.answer(f"❌ Помилка: {e}")
@@ -389,7 +437,7 @@ async def diary_hw_selected(callback: CallbackQuery):
         await callback.message.edit_text(
             f"{schedule}",
             parse_mode="HTML",
-            reply_markup=final_keyboard,  # Оновлюємо клавіатуру разом з текстом
+            reply_markup=result_actions_kb(user_id, final_keyboard),
             disable_web_page_preview=True
         )
     except TelegramBadRequest as e:

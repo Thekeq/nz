@@ -1,11 +1,55 @@
 import sqlite3
 import datetime
+import threading
+
+
+class _LockedConnection:
+    """Обгортка над sqlite3.Connection: серіалізує доступ із різних потоків
+    (хендлери в event loop + виклики через asyncio.to_thread у фонових задачах).
+    RLock — щоб execute() всередині блоку `with connection:` не дедлочився."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def __enter__(self):
+        self._lock.acquire()
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return self._conn.__exit__(exc_type, exc, tb)
+        finally:
+            self._lock.release()
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.execute(*args, **kwargs)
+
+    def backup(self, target, **kwargs):
+        with self._lock:
+            return self._conn.backup(target, **kwargs)
+
+    def close(self):
+        with self._lock:
+            return self._conn.close()
 
 
 class DataBase:
     def __init__(self, db_file):
-        self.connection = sqlite3.connect(db_file, check_same_thread=False)
+        self.connection = _LockedConnection(
+            sqlite3.connect(db_file, check_same_thread=False)
+        )
+        self._configure_connection()
         self._init_schema()
+
+    def _configure_connection(self):
+        with self.connection:
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            self.connection.execute("PRAGMA synchronous=NORMAL")
+            self.connection.execute("PRAGMA busy_timeout=5000")
+            self.connection.execute("PRAGMA foreign_keys=ON")
 
     def _init_schema(self):
         with self.connection:
@@ -92,10 +136,142 @@ class DataBase:
                 )
             """)
 
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                  user_id    INTEGER NOT NULL,
+                  provider   TEXT NOT NULL,
+                  cookies    TEXT NOT NULL,
+                  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                  PRIMARY KEY(user_id, provider),
+                  FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+            """)
+
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS command_metrics (
+                  day        INTEGER NOT NULL,
+                  command    TEXT NOT NULL,
+                  calls      INTEGER NOT NULL DEFAULT 0,
+                  errors     INTEGER NOT NULL DEFAULT 0,
+                  total_ms   INTEGER NOT NULL DEFAULT 0,
+                  max_ms     INTEGER NOT NULL DEFAULT 0,
+                  PRIMARY KEY(day, command)
+                )
+            """)
+
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS nz_session_metrics (
+                  day     INTEGER NOT NULL,
+                  event   TEXT NOT NULL,
+                  count   INTEGER NOT NULL DEFAULT 0,
+                  PRIMARY KEY(day, event)
+                )
+            """)
+
             try:
                 self.connection.execute("ALTER TABLE subs ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
+
+            # FSM-стани aiogram (переживають рестарт бота)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS fsm_storage (
+                  key        TEXT PRIMARY KEY,
+                  state      TEXT,
+                  data       TEXT NOT NULL DEFAULT '{}',
+                  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                )
+            """)
+
+            # Монетизація: тріал, джерело VIP (paid/ref), воронка закінчення,
+            # тижневий безкоштовний ліміт ШІ
+            for ddl in (
+                "ALTER TABLE subs ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE subs ADD COLUMN vip_source TEXT NOT NULL DEFAULT 'paid'",
+                "ALTER TABLE subs ADD COLUMN expiry_stage INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE subs ADD COLUMN ai_free_used INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE subs ADD COLUMN ai_free_week INTEGER NOT NULL DEFAULT 0",
+            ):
+                try:
+                    self.connection.execute(ddl)
+                except Exception:
+                    pass
+
+            # Видані реферальні нагороди (для місячного ліміту безкоштовного VIP)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS ref_vip_grants (
+                  referrer_id INTEGER NOT NULL,
+                  granted_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                )
+            """)
+
+    # ===== FSM storage (aiogram) =====
+
+    def fsm_set_state(self, key: str, state: str | None):
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO fsm_storage(key, state, updated_at)
+                VALUES (?, ?, strftime('%s','now'))
+                ON CONFLICT(key) DO UPDATE SET
+                    state=excluded.state,
+                    updated_at=excluded.updated_at
+                """,
+                (key, state)
+            )
+
+    def fsm_get_state(self, key: str) -> str | None:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT state FROM fsm_storage WHERE key=?", (key,)
+            ).fetchone()
+            return row[0] if row else None
+
+    def fsm_set_data(self, key: str, data_json: str):
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO fsm_storage(key, data, updated_at)
+                VALUES (?, ?, strftime('%s','now'))
+                ON CONFLICT(key) DO UPDATE SET
+                    data=excluded.data,
+                    updated_at=excluded.updated_at
+                """,
+                (key, data_json)
+            )
+
+    def fsm_get_data(self, key: str) -> str:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT data FROM fsm_storage WHERE key=?", (key,)
+            ).fetchone()
+            return row[0] if row and row[0] else "{}"
+
+    def fsm_purge_older_than(self, seconds: int = 48 * 3600):
+        """Видаляє «завислі» стани, які не оновлювались довше seconds."""
+        cutoff = int(datetime.datetime.now().timestamp()) - seconds
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM fsm_storage WHERE updated_at < ?", (cutoff,)
+            )
+
+    # ===== Maintenance =====
+
+    def disable_all_notify(self, user_id: int):
+        """Вимикає всі розсилки (юзер заблокував бота — нема сенсу скрапити для нього)."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET notify=0, notify_grades=0 WHERE user_id=?",
+                (user_id,)
+            )
+
+    def backup_to(self, dest_path: str):
+        """Консистентна копія бази через sqlite backup API (працює і під WAL)."""
+        dest = sqlite3.connect(dest_path)
+        try:
+            self.connection.backup(dest)
+        finally:
+            dest.close()
 
     # ===== Utility =====
     def get_vip_referral_stats(self, days: int = 14):
@@ -163,6 +339,113 @@ class DataBase:
                 (amount, user_id)
             )
 
+    def set_session_cookies(self, user_id: int, provider: str, cookies: str):
+        self.ensure_user(user_id)
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO sessions(user_id, provider, cookies, updated_at)
+                VALUES (?, ?, ?, strftime('%s','now'))
+                ON CONFLICT(user_id, provider) DO UPDATE SET
+                    cookies=excluded.cookies,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, provider, cookies)
+            )
+
+    def get_session_cookies(self, user_id: int, provider: str) -> str | None:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT cookies FROM sessions WHERE user_id=? AND provider=?",
+                (user_id, provider)
+            ).fetchone()
+            return row[0] if row else None
+
+    def delete_session_cookies(self, user_id: int, provider: str | None = None):
+        with self.connection:
+            if provider:
+                self.connection.execute(
+                    "DELETE FROM sessions WHERE user_id=? AND provider=?",
+                    (user_id, provider)
+                )
+            else:
+                self.connection.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+    def record_command_metric(self, command: str, duration_ms: int, ok: bool = True):
+        day = datetime.date.today().toordinal()
+        command = (command or "unknown")[:80]
+        duration_ms = max(0, int(duration_ms or 0))
+        errors = 0 if ok else 1
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO command_metrics(day, command, calls, errors, total_ms, max_ms)
+                VALUES (?, ?, 1, ?, ?, ?)
+                ON CONFLICT(day, command) DO UPDATE SET
+                    calls=command_metrics.calls + 1,
+                    errors=command_metrics.errors + excluded.errors,
+                    total_ms=command_metrics.total_ms + excluded.total_ms,
+                    max_ms=MAX(command_metrics.max_ms, excluded.max_ms)
+                """,
+                (day, command, errors, duration_ms, duration_ms)
+            )
+
+    def get_command_metrics(self, days: int = 7, limit: int = 12):
+        min_day = datetime.date.today().toordinal() - (days - 1)
+        with self.connection:
+            rows = self.connection.execute(
+                """
+                SELECT command,
+                       SUM(calls) as calls,
+                       SUM(errors) as errors,
+                       SUM(total_ms) as total_ms,
+                       MAX(max_ms) as max_ms
+                FROM command_metrics
+                WHERE day >= ?
+                GROUP BY command
+                ORDER BY calls DESC
+                LIMIT ?
+                """,
+                (min_day, limit)
+            ).fetchall()
+        return [
+            {
+                "command": row[0],
+                "calls": int(row[1] or 0),
+                "errors": int(row[2] or 0),
+                "avg_ms": int((row[3] or 0) / row[1]) if row[1] else 0,
+                "max_ms": int(row[4] or 0),
+            }
+            for row in rows
+        ]
+
+    def record_nz_session_event(self, event: str):
+        day = datetime.date.today().toordinal()
+        event = (event or "unknown")[:40]
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO nz_session_metrics(day, event, count)
+                VALUES (?, ?, 1)
+                ON CONFLICT(day, event) DO UPDATE SET count=count + 1
+                """,
+                (day, event)
+            )
+
+    def get_nz_session_metrics(self, days: int = 7):
+        min_day = datetime.date.today().toordinal() - (days - 1)
+        with self.connection:
+            rows = self.connection.execute(
+                """
+                SELECT event, SUM(count)
+                FROM nz_session_metrics
+                WHERE day >= ?
+                GROUP BY event
+                """,
+                (min_day,)
+            ).fetchall()
+        return {row[0]: int(row[1] or 0) for row in rows}
+
     def try_mark_ref_rewarded(self, user_id: int) -> bool:
         """
         Возвращает True только первый раз.
@@ -203,6 +486,17 @@ class DataBase:
                 (user_id,)
             ).fetchone()
             return int(row[0] or 0) if row else 0
+
+    def get_invite_progress(self, user_id: int):
+        self.ensure_user(user_id)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT invites, total_invites FROM users WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+        if not row:
+            return 0, 0
+        return int(row[0] or 0), int(row[1] or 0)
 
     def try_consume_invites(self, user_id: int, need: int = 3) -> bool:
         """
@@ -292,34 +586,33 @@ class DataBase:
         # logout: удаляем только логин/пароль, VIP не трогаем
         with self.connection:
             self.connection.execute("DELETE FROM creds WHERE user_id=?", (user_id,))
+            self.connection.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
 
     # ===== VIP =====
 
-    def set_vip(self, user_id: int, days: int = 30):
+    def set_vip(self, user_id: int, days: int = 30, source: str = "paid"):
         self.ensure_user(user_id)
+        now = int(datetime.datetime.now().timestamp())
 
-        # Якщо днів 0 — це означає назавжди
-        if days == 0:
-            new_expires = 0
-        else:
-            now = int(datetime.datetime.now().timestamp())
-            add_sec = int(datetime.timedelta(days=days).total_seconds())
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT vip, expires, COALESCE(vip_source,'paid') FROM subs WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            # Перевіряємо поточний статус
+            current_vip = int(row[0] or 0) if row else 0
+            current_expires = int(row[1] or 0) if row else 0
+            current_source = row[2] if row else "paid"
 
-            with self.connection:
-                row = self.connection.execute(
-                    "SELECT vip, expires FROM subs WHERE user_id=?",
-                    (user_id,)
-                ).fetchone()
-                # Перевіряємо поточний статус
-                current_vip = int(row[0] or 0) if row else 0
-                current_expires = int(row[1] or 0) if row else 0
+            # Якщо днів 0 — це означає назавжди
+            if days == 0:
+                new_expires = 0
+            else:
+                add_sec = int(datetime.timedelta(days=days).total_seconds())
 
                 # Логіка додавання часу:
                 # 1. Якщо юзер вже VIP і час ще не вийшов (і це не безліміт) — додаємо до залишку.
-                # 2. Якщо у юзера "назавжди" (0), то додавання днів не має змінити статус (залишаємо 0),
-                #    ХІБА ЩО ти хочеш "понизити" його до тимчасового.
-                #    У цьому коді: якщо у юзера "назавжди", додавання днів ігнорується, він лишається вічним.
-
+                # 2. Якщо у юзера "назавжди" (0), додавання днів ігнорується, він лишається вічним.
                 if current_vip and current_expires == 0:
                     new_expires = 0  # Вже вічний, лишаємо вічним
                 elif current_vip and current_expires > now:
@@ -327,14 +620,26 @@ class DataBase:
                 else:
                     new_expires = now + add_sec
 
-        self.connection.execute(
-            """
-            INSERT INTO subs(user_id, vip, expires)
-            VALUES (?, 1, ?)
-            ON CONFLICT(user_id) DO UPDATE SET vip=1, expires=excluded.expires
-            """,
-            (user_id, new_expires)
-        )
+            # Реферальні дні не підвищують статус до 'paid'
+            # і не понижують активний платний VIP до 'ref'
+            active = current_vip and (current_expires == 0 or current_expires > now)
+            if source == "paid" or (active and current_source == "paid"):
+                new_source = "paid"
+            else:
+                new_source = "ref"
+
+            self.connection.execute(
+                """
+                INSERT INTO subs(user_id, vip, expires, vip_source, expiry_stage)
+                VALUES (?, 1, ?, ?, 0)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    vip=1,
+                    expires=excluded.expires,
+                    vip_source=excluded.vip_source,
+                    expiry_stage=0
+                """,
+                (user_id, new_expires, new_source)
+            )
 
     def get_vip_status(self, user_id: int):
         with self.connection:
@@ -346,6 +651,112 @@ class DataBase:
                 return False, 0
             vip, expires = int(row[0] or 0), int(row[1] or 0)
             return bool(vip), expires
+
+    def get_vip_source(self, user_id: int) -> str:
+        """'paid' — куплений/тріал/адмінський, 'ref' — за запрошення друзів."""
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT COALESCE(vip_source,'paid') FROM subs WHERE user_id=?",
+                (user_id,)
+            ).fetchone()
+            return row[0] if row else "paid"
+
+    def try_use_trial(self, user_id: int) -> bool:
+        """True тільки один раз — коли юзер ще не використовував пробний VIP."""
+        self.ensure_user(user_id)
+        with self.connection:
+            cur = self.connection.execute(
+                "UPDATE subs SET trial_used=1 WHERE user_id=? AND trial_used=0",
+                (user_id,)
+            )
+            return cur.rowcount == 1
+
+    # ===== Безкоштовний тижневий ліміт ШІ (для не-VIP) =====
+
+    @staticmethod
+    def _current_ai_week() -> int:
+        return datetime.date.today().toordinal() // 7
+
+    def free_ai_left(self, user_id: int, limit: int = 3) -> int:
+        self.ensure_user(user_id)
+        week = self._current_ai_week()
+        with self.connection:
+            # новий тиждень — скидаємо лічильник
+            self.connection.execute(
+                "UPDATE subs SET ai_free_used=0, ai_free_week=? WHERE user_id=? AND ai_free_week<>?",
+                (week, user_id, week)
+            )
+            row = self.connection.execute(
+                "SELECT ai_free_used FROM subs WHERE user_id=?", (user_id,)
+            ).fetchone()
+            used = int(row[0] or 0) if row else 0
+            return max(0, limit - used)
+
+    def try_use_free_ai(self, user_id: int, limit: int = 3) -> bool:
+        """Атомарно списує 1 безкоштовний AI-запит тижня. True — якщо вдалося."""
+        self.ensure_user(user_id)
+        week = self._current_ai_week()
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET ai_free_used=0, ai_free_week=? WHERE user_id=? AND ai_free_week<>?",
+                (week, user_id, week)
+            )
+            cur = self.connection.execute(
+                "UPDATE subs SET ai_free_used=ai_free_used+1 WHERE user_id=? AND ai_free_used<?",
+                (user_id, limit)
+            )
+            return cur.rowcount == 1
+
+    # ===== Ліміт реферальних нагород =====
+
+    def add_ref_grant(self, referrer_id: int):
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO ref_vip_grants(referrer_id) VALUES (?)",
+                (referrer_id,)
+            )
+
+    def count_recent_ref_grants(self, referrer_id: int, days: int = 30) -> int:
+        cutoff = int(datetime.datetime.now().timestamp()) - days * 24 * 3600
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT COUNT(*) FROM ref_vip_grants WHERE referrer_id=? AND granted_at>=?",
+                (referrer_id, cutoff)
+            ).fetchone()
+            return int(row[0] or 0)
+
+    # ===== Воронка закінчення VIP =====
+
+    def get_vips_expiring_within(self, seconds: int):
+        """VIP, що закінчуються протягом seconds і ще не отримали нагадування."""
+        now = int(datetime.datetime.now().timestamp())
+        with self.connection:
+            return self.connection.execute(
+                """
+                SELECT user_id, expires FROM subs
+                WHERE vip=1 AND expires>? AND expires<=? AND expiry_stage=0
+                """,
+                (now, now + seconds)
+            ).fetchall()
+
+    def get_vips_just_expired(self, grace_seconds: int):
+        """VIP, що закінчилися нещодавно і ще не отримали win-back пропозицію."""
+        now = int(datetime.datetime.now().timestamp())
+        with self.connection:
+            return self.connection.execute(
+                """
+                SELECT user_id, expires FROM subs
+                WHERE vip=1 AND expires>0 AND expires<=? AND expires>? AND expiry_stage<2
+                """,
+                (now, now - grace_seconds)
+            ).fetchall()
+
+    def set_expiry_stage(self, user_id: int, stage: int):
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET expiry_stage=? WHERE user_id=?",
+                (stage, user_id)
+            )
 
     # ===== Notify =====
 

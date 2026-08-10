@@ -1,4 +1,5 @@
 import time
+import logging
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, \
@@ -10,6 +11,8 @@ from states import SupportStates, AuthStates  # Якщо треба
 from utils import track_activity, user_can_call
 
 router = Router()
+logger = logging.getLogger(__name__)
+POLICY_NOTE = "\n\n<i>Використовуючи бот, ви погоджуєтеся з /policy.</i>"
 
 
 @router.message(CommandStart())
@@ -40,20 +43,16 @@ async def start(message: Message, state: FSMContext):
                         "✅ Друг перейшов за вашим посиланням.\n"
                         "Зарахування буде після підключення ним NZ-акаунту (отримає розклад/оцінки)."
                     )
-            except Exception as e:
-                print("referral error:", e)
-
-    await message.answer(
-        "<b>Використовуючи бот, ви погоджуєтеся з політикою /policy</b>", parse_mode="HTML"
-    )
+            except Exception:
+                logger.exception("Failed to set referral user_id=%s referrer_id=%s", user_id, referrer_id)
 
     welcome_text = (
-        "👋 Привіт! Я бот для <b>Human.ua, NZ.ua</b>:\n\n"
-        "✅ Нагадую про уроки за 5 хв до початку\n"
-        "✅ Показую розклад, новини та середній бал\n"
-        "✅ Даю бонуси за запрошення друзів\n\n"
-        "Щоб показати приклад — натисни кнопку нижче."
-    )
+        "🎓 <b>Шкільний помічник у Telegram</b>\n\n"
+        "• Розклад, ДЗ, оцінки та новини з <b>NZ.ua/Human</b>\n"
+        "• Нагадування за 5 хв до уроку\n"
+        "• Бонуси за запрошення друзів\n\n"
+        "Можеш подивитися приклад або одразу увійти у щоденник."
+    ) + POLICY_NOTE
 
     if db.has_credentials(user_id):
         # 1. Текст для VIP користувачів
@@ -75,7 +74,7 @@ async def start(message: Message, state: FSMContext):
             "📜 /policy — Правила користування\n"
             "🔧 /support — Підтримка\n"
             "🚪 /logout — Вихід з акаунту"
-        )
+        ) + POLICY_NOTE
 
         # 2. Текст для звичайних користувачів
         free_text = (
@@ -93,7 +92,7 @@ async def start(message: Message, state: FSMContext):
             "📜 /policy — Правила користування\n"
             "🔧 /support — Підтримка\n"
             "🚪 /logout — Вихід з акаунту"
-        )
+        ) + POLICY_NOTE
 
         if message.chat.type == "private":
             vip_flag, expires = db.get_vip_status(user_id)

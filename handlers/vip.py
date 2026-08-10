@@ -4,6 +4,7 @@ import datetime
 import random
 import re
 import gc
+import logging
 from html import escape
 
 from typing import Union
@@ -14,9 +15,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID
+from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
 from utils import track_activity, fix_ai_response, user_can_call, compact_num
-from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb
+from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
 from services.ai import ai
 from services.drawer import draw_wrapped
@@ -24,10 +25,28 @@ from services.diaryhuman import get_diary_grades_human
 from services.diarynz import get_diary_grades
 
 router = Router()
+logger = logging.getLogger(__name__)
+
+FREE_AI_LIMIT = 3  # безкоштовних AI-запитів на тиждень для не-VIP
+
+VIP_PLANS = {
+    "week":    {"days": 7,  "stars": 25,  "tokens": 250_000,   "title": "VIP на 1 тиждень", "label": "1 тиждень"},
+    "month":   {"days": 30, "stars": 75,  "tokens": 1_000_000, "title": "VIP на 1 місяць",  "label": "1 місяць"},
+    "months3": {"days": 90, "stars": 200, "tokens": 3_000_000, "title": "VIP на 3 місяці",  "label": "3 місяці"},
+}
+# Win-back: 48 годин після закінчення VIP — місяць зі знижкою
+WINBACK_PLAN = {"days": 30, "stars": 50, "tokens": 1_000_000, "title": "VIP на 1 місяць (-33%)", "label": "1 місяць"}
+WINBACK_GRACE_SEC = 48 * 3600
+
+
+def _is_vip(user_id: int) -> bool:
+    vip_flag, expires = db.get_vip_status(user_id)
+    return bool(vip_flag) and (expires == 0 or expires > int(time.time()))
 
 
 @router.message(Command('vip'))
 @router.message(F.text == "⭐️ Free VIP")
+@router.message(F.text == "⭐️ VIP")
 @router.callback_query(F.data == "vip_menu")
 async def vip_func(event: Union[Message, CallbackQuery]):
     user_id = event.from_user.id
@@ -44,8 +63,10 @@ async def vip_func(event: Union[Message, CallbackQuery]):
     db.ensure_user(user_id)
 
     vip_flag, expires = db.get_vip_status(user_id)
+    invites_left, total_invites = db.get_invite_progress(user_id)
     now_ts = int(time.time())
     is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+    progress_text = f"{invites_left}/1 до наступних 3 днів VIP"
 
     if is_vip:
         date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y")
@@ -62,57 +83,112 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"🔔 /notify_grades — <b>Сповіщення о нових оцінках (nz)</b>\n"
             f"⚡ <b>Пріоритетні запити та підтримка</b>\n\n"
             f"<blockquote>🎁 <b>БЕЗКОШТОВНИЙ VIP</b> на 3 дні за кожного друга!\n"
+            f"Прогрес: <b>{progress_text}</b>\n"
+            f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання:\n"
-            f"https://t.me/nzdiary_bot?start={user_id}</blockquote>", reply_markup=share_kb(user_id),
+            f"https://t.me/{BOT_USERNAME}?start={user_id}</blockquote>", reply_markup=share_kb(user_id),
             parse_mode="HTML", disable_web_page_preview=True
         )
     else:
+        db.record_command_metric("funnel:vip_menu", 0)
         await message_object.answer(
-            "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP\n"
-            f"Ваше реферальне посилання: https://t.me/nzdiary_bot?start={user_id}\n\n"
+            "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP (до 9 днів на місяць)\n"
+            f"Прогрес: <b>{progress_text}</b>\n"
+            f"Всього запрошено: <b>{total_invites}</b>\n"
+            f"Ваше реферальне посилання: https://t.me/{BOT_USERNAME}?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
             f"🎨 Ексклюзивні теми (Matrix, Gold, Ocean)\n"
-            f"✨ Використання ШІ-асистента\n"
+            f"✨ ШІ-асистент без тижневих лімітів\n"
             f"📅 Перегляд розкладу по дням\n"
             f"⏰ Нагадування за 5-хв до уроку\n"
             f"🔔 Сповіщення про нові оцінки (NZ)\n"
             f"📊 Розширений рейтинг та статистика, діаграма-павутинка\n"
             f"⚡ Пріоритетні запити та швидка підтримка\n\n"
-            f"💎 <b>Оберіть спосіб оплати VIP:</b>\n"
-            f"<blockquote>⭐️ <b>Telegram Stars (50 ⭐️)</b>\n"
-            f"Натисніть кнопку нижче. Активація миттєва.</blockquote>\n\n"
-            f"🐈 <b>Monobank (Банка) 50 грн</b>\n"
+            f"💎 <b>Оберіть тариф</b> — оплата Telegram Stars, активація миттєва:\n\n"
+            f"🐈 <i>Або Monobank (Банка): 25 / 75 / 200 грн — тиждень / місяць / 3 місяці</i>\n"
             f"<blockquote>Реквізити банки: <code>4874 1000 2294 2034</code>\n"
-            f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n\n"
+            f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n"
             f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
-            f"👉 <code>{user_id}</code> 👈\n"
-            f"<i>(натисніть щоб скопіювати)</i></blockquote>", reply_markup=share_kb(user_id),
+            f"👉 <code>{user_id}</code> 👈 <i>(натисніть щоб скопіювати)</i></blockquote>",
+            reply_markup=vip_plans_kb(user_id),
             disable_web_page_preview=True
         )
 
-        prices = [LabeledPrice(label="VIP доступ на 1 місяць", amount=50)]  # сума в XTR-центах
 
-        await message_object.answer_invoice(
-            title="VIP Доступ",
-            description="Миттєвий доступ до всіх перелічених функцій на 1 місяць 🚀",
-            payload=f"vip_{user_id}_{int(datetime.datetime.now().timestamp())}",
-            provider_token="",  # токен від Telegram Payments (Stars)
-            currency="XTR",
-            prices=prices,
-            start_parameter="vip_payment",
-            reply_markup=payment_keyboard()
-        )
+@router.callback_query(F.data.startswith("buy:"))
+async def buy_plan(callback: CallbackQuery):
+    plan_key = callback.data.split(":")[1]
+    plan = VIP_PLANS.get(plan_key)
+    if not plan:
+        await callback.answer("⚠️ Невідомий тариф", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    db.record_command_metric(f"funnel:invoice:{plan_key}", 0)
+
+    await callback.message.answer_invoice(
+        title=plan["title"],
+        description=f"Миттєвий доступ до всіх VIP-функцій на {plan['label']} 🚀",
+        payload=f"vip:{plan_key}:{user_id}",
+        provider_token="",  # токен від Telegram Payments (Stars)
+        currency="XTR",
+        prices=[LabeledPrice(label=plan["title"], amount=plan["stars"])],
+        start_parameter="vip_payment",
+        reply_markup=payment_keyboard(plan["stars"])
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "buy_winback")
+async def buy_winback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    vip_flag, expires = db.get_vip_status(user_id)
+    now_ts = int(time.time())
+    active = bool(vip_flag) and (expires == 0 or expires > now_ts)
+
+    # знижка діє лише 48 годин після закінчення VIP
+    if active or not expires or now_ts > expires + WINBACK_GRACE_SEC:
+        await callback.answer("⌛️ Ця пропозиція вже недійсна", show_alert=True)
+        return
+
+    db.record_command_metric("funnel:invoice:winback", 0)
+    await callback.message.answer_invoice(
+        title=WINBACK_PLAN["title"],
+        description="Повернення VIP зі знижкою: всі функції на 1 місяць 🚀",
+        payload=f"vip:winback:{user_id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label=WINBACK_PLAN["title"], amount=WINBACK_PLAN["stars"])],
+        start_parameter="vip_payment",
+        reply_markup=payment_keyboard(WINBACK_PLAN["stars"])
+    )
+    await callback.answer()
 
 
 @router.message(F.successful_payment)
 async def successful_payment(message: Message):
     user_id = message.from_user.id
-    db.set_vip(user_id, days=30)
-    db.set_tokens(user_id, 1000000)
+
+    payload = message.successful_payment.invoice_payload or ""
+    parts = payload.split(":")
+    plan_key = parts[1] if len(parts) >= 2 and parts[0] == "vip" else "month"
+    plan = WINBACK_PLAN if plan_key == "winback" else VIP_PLANS.get(plan_key, VIP_PLANS["month"])
+
+    db.set_vip(user_id, days=plan["days"], source="paid")
+    # токени не зрізаємо, якщо в юзера залишилось більше
+    db.set_tokens(user_id, max(db.get_tokens(user_id), plan["tokens"]))
+    db.record_command_metric(f"funnel:paid:{plan_key}", 0)
+
     vip, expires = db.get_vip_status(user_id)
-    date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
-    await message.answer(f"✅ Ви отримали VIP доступ до {date_str}\n"
-                         f"💎 Вам нараховано <b>1,000,000 AI-токенів</b>!", reply_markup=build_vip_kb())
+    date_str = "НАЗАВЖДИ :)" if expires == 0 else datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
+    await message.answer(
+        f"✅ Ви отримали VIP доступ до {date_str}\n"
+        f"💎 На балансі <b>{compact_num(db.get_tokens(user_id))} AI-токенів</b>!\n\n"
+        f"🎁 За кожного запрошеного друга — ще +3 дні VIP:\n"
+        f"https://t.me/{BOT_USERNAME}?start={user_id}",
+        reply_markup=build_vip_kb(),
+        disable_web_page_preview=True
+    )
 
 
 @router.pre_checkout_query()
@@ -124,53 +200,100 @@ async def pre_checkout(pre_checkout_q: PreCheckoutQuery):
 @router.message(F.text == "✨ ШІ")
 async def ai_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    vip_flag, expires = db.get_vip_status(user_id)
-    now_ts = int(time.time())
-    is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-    if is_vip:
+    exit_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Вийти з режиму ШІ ✨", callback_data="exit_ai")]
+        ]
+    )
+
+    if _is_vip(user_id):
         current_tokens = db.get_tokens(user_id)
         await state.set_state(AIStates.waiting_input)
         await message.reply(
             "✨ Напиши питання текстом або надішли фото з підписом\n"
-            f"У вас ще 💎 <b>{compact_num(current_tokens)}/1M</b> токенів", reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="Вийти з режиму ШІ ✨", callback_data="exit_ai")]
-                ]
-            )
+            f"У вас ще 💎 <b>{compact_num(current_tokens)}/1M</b> токенів",
+            reply_markup=exit_kb
         )
     else:
-        await message.reply("🔒 Ця функція доступна лише /vip користувачам")
+        # не-VIP: даємо спробувати — FREE_AI_LIMIT запитів на тиждень
+        left = db.free_ai_left(user_id, FREE_AI_LIMIT)
+        if left > 0:
+            await state.set_state(AIStates.waiting_input)
+            await message.reply(
+                "✨ Напиши питання текстом або надішли фото з підписом\n"
+                f"🎁 У тебе <b>{left}/{FREE_AI_LIMIT}</b> безкоштовних запитів на цьому тижні\n"
+                "Безліміт з 1M токенів — у /vip",
+                reply_markup=exit_kb
+            )
+        else:
+            await message.reply(
+                f"🎁 Безкоштовні AI-запити цього тижня закінчились ({FREE_AI_LIMIT}/{FREE_AI_LIMIT})\n"
+                "⭐️ VIP дає <b>1,000,000 токенів</b> — вистачає на сотні запитів!",
+                reply_markup=vip_upsell_kb()
+            )
+
+
+async def _charge_ai(message: Message, state: FSMContext, user_id: int, is_vip: bool) -> bool:
+    """Списання за AI-запит: не-VIP витрачає тижневий безкоштовний ліміт."""
+    if is_vip:
+        return True
+    if db.try_use_free_ai(user_id, FREE_AI_LIMIT):
+        return True
+    await message.reply(
+        "🎁 Безкоштовні AI-запити цього тижня закінчились.\n"
+        "⭐️ У VIP — <b>1,000,000 токенів</b> без тижневих лімітів!",
+        reply_markup=vip_upsell_kb()
+    )
+    await state.clear()
+    return False
+
+
+def _ai_cost_footer(user_id: int, is_vip: bool, cost: int) -> str:
+    """VIP платить токенами, не-VIP бачить залишок безкоштовних запитів."""
+    if is_vip:
+        db.deduct_tokens(user_id, cost)
+        return f"\n💎 Витрачено: {cost} токенів."
+    left = db.free_ai_left(user_id, FREE_AI_LIMIT)
+    return f"\n🎁 Безкоштовних запитів залишилось: {left}/{FREE_AI_LIMIT} (безліміт у /vip)"
 
 
 @router.message(AIStates.waiting_input)
 async def ai_input_text_or_photo(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    is_vip = _is_vip(user_id)
 
-    current_tokens = db.get_tokens(user_id)
-    if current_tokens <= 0:
-        await message.reply("❌ У вас закінчилися AI-токени! Поновіть VIP, щоб отримати ще 1 млн.")
-        await state.clear()
-        return
+    if is_vip:
+        current_tokens = db.get_tokens(user_id)
+        if current_tokens <= 0:
+            await message.reply(
+                "❌ У вас закінчилися AI-токени! Поновіть VIP, щоб отримати ще 1 млн.",
+                reply_markup=vip_upsell_kb()
+            )
+            await state.clear()
+            return
 
     if message.text:
         if len(message.text) > 400:
             await message.reply(f"Максимальна довжина тексту 400 символів. Ви ввели {len(message.text)}")
             return
         user_prompt = message.text.strip()
+        if not await _charge_ai(message, state, user_id, is_vip):
+            return
         try:
             # Викликаємо оновлену функцію, яка повертає ДВА значення
             answer, cost = await ai(user_prompt)
-            # Списуємо токени
-            db.deduct_tokens(user_id, cost)
+            if not answer:
+                await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
+                await state.clear()
+                return
             answer = fix_ai_response(answer)
             answer += f"\n\n🔄 <i>Щоб задати нове питання — натисни</i> /ai"
-            # Можна показувати залишок (опціонально)
-            answer += f"\n💎 Витрачено: {cost} токенів."
+            answer += _ai_cost_footer(user_id, is_vip, cost)
 
             await message.reply(answer, parse_mode="HTML", disable_web_page_preview=True)
 
-        except Exception as e:
-            print(f"AI Error: {e}")
+        except Exception:
+            logger.exception("AI text request failed for user_id=%s", user_id)
             await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
 
         await state.clear()
@@ -190,20 +313,23 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
         file_bytes = await message.bot.download_file(file.file_path)
         img_bytes = file_bytes.read()
 
+        if not await _charge_ai(message, state, user_id, is_vip):
+            return
         try:
             # Викликаємо оновлену функцію з фото
             answer, cost = await ai(caption, img_bytes)
-            # Списуємо токени
-            db.deduct_tokens(user_id, cost)
-
+            if not answer:
+                await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
+                await state.clear()
+                return
             answer = fix_ai_response(answer)
             answer += "\n\n🔄 <i>Щоб задати нове питання — натисни</i> /ai"
-            answer += f"\n💎 Витрачено: {cost} токенів."
+            answer += _ai_cost_footer(user_id, is_vip, cost)
 
             await message.reply(answer, parse_mode="HTML", disable_web_page_preview=True)
 
-        except Exception as e:
-            print(f"AI Error: {e}")
+        except Exception:
+            logger.exception("AI photo request failed for user_id=%s", user_id)
             await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
 
         await state.clear()
@@ -216,14 +342,7 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("ai_hw:"))
 async def handle_ai_homework(callback: CallbackQuery):
     user_id = callback.from_user.id
-    # перевіряємо VIP
-    vip_flag, expires = db.get_vip_status(user_id)
-    now_ts = int(time.time())
-    is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-    if not is_vip:
-        await callback.message.answer("🔒 Ця функція доступна лише /vip користувачам")
-        await callback.answer()
-        return
+    is_vip = _is_vip(user_id)
 
     temp_id = callback.data.split(":")[1]
     hw_text = HW_AI_CACHE.get(temp_id)
@@ -232,10 +351,21 @@ async def handle_ai_homework(callback: CallbackQuery):
         await callback.answer("⚠️ Дані застаріли, спробуйте ще раз. /homework")
         return
 
-    current_tokens = db.get_tokens(user_id)
-    if current_tokens <= 0:
-        await callback.answer("❌ Закінчилися AI-токени!", show_alert=True)
-        return
+    if is_vip:
+        current_tokens = db.get_tokens(user_id)
+        if current_tokens <= 0:
+            await callback.answer("❌ Закінчилися AI-токени!", show_alert=True)
+            return
+    else:
+        # не-VIP: порада по ДЗ у рахунок тижневого безкоштовного ліміту
+        if not db.try_use_free_ai(user_id, FREE_AI_LIMIT):
+            await callback.message.answer(
+                "🎁 Безкоштовні AI-запити цього тижня закінчились.\n"
+                "⭐️ VIP дає <b>1,000,000 токенів</b> — порада по ДЗ щодня!",
+                reply_markup=vip_upsell_kb()
+            )
+            await callback.answer()
+            return
 
     await callback.message.edit_text("🤖 ШІ думає над порадою...")
 
@@ -251,14 +381,15 @@ async def handle_ai_homework(callback: CallbackQuery):
     full_prompt = f"{system_instruction}\n\nОсь моє ДЗ: {hw_text}"
     try:
         response_text, cost = await ai(full_prompt)
-        # 3. Списуємо
-        db.deduct_tokens(user_id, cost)
-        response_text += f"\n\n💎 Витрачено: {cost} токенів."
+        if not response_text:
+            await callback.message.answer("❌ Не вдалося отримати пораду. Спробуй пізніше.")
+            return
+        response_text += "\n" + _ai_cost_footer(user_id, is_vip, cost)
 
         await callback.message.answer(response_text, parse_mode="HTML")
 
-    except Exception as e:
-        print(f"AI Error: {e}")
+    except Exception:
+        logger.exception("AI homework request failed for user_id=%s", user_id)
         await callback.message.answer("❌ Не вдалося отримати пораду. Спробуй пізніше.")
     # Видаляємо з кешу, щоб не забивати пам'ять
     del HW_AI_CACHE[temp_id]
@@ -312,10 +443,18 @@ async def send_wrapped(message: Message, state: FSMContext):
                         best_subject = best_subject.rsplit(" (", 1)[0]
                     else:
                         best_subject = "Тиша..."
-                except:
+                except Exception:
                     avg, total, best_subject = 0.0, 0, "Тиша..."
             else:
-                grades, text = await asyncio.to_thread(get_diary_grades, login, password, days_back)
+                grades, text = await asyncio.to_thread(
+                    get_diary_grades,
+                    login,
+                    password,
+                    days_back,
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
 
                 values = [v for v in grades.values() if isinstance(v, (int, float))]
                 filtered = {k: v for k, v in grades.items() if isinstance(v, (int, float))}
@@ -330,14 +469,13 @@ async def send_wrapped(message: Message, state: FSMContext):
                 total = sum(map(int, counts))
 
         # 2. ПЕРЕВІРКА VIP
-        vip_flag, expires = db.get_vip_status(user_id)
-        now_ts = int(time.time())
-        is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
+        # Ексклюзивні стилі — тільки платний VIP (реферальний — базовий стиль)
+        is_paid_vip = _is_vip(user_id) and db.get_vip_source(user_id) == "paid"
 
         await wait_msg.delete()
 
-        # 3. ЛОГІКА ВИБОРУ СТИЛЮ (ЯКЩО VIP)
-        if is_vip:
+        # 3. ЛОГІКА ВИБОРУ СТИЛЮ (ЯКЩО ПЛАТНИЙ VIP)
+        if is_paid_vip:
             await state.update_data(
                 provider=provider,
                 username=name,
@@ -388,14 +526,14 @@ async def send_wrapped(message: Message, state: FSMContext):
             photo_id = sent_msg.photo[-1].file_id
             WRAPPED_CACHE[user_id] = {
                 "file_id": photo_id,
-                "caption": f"🔥 Мій середній бал: {avg}! (Стиль: Default)\nХочеш побачити свої результати? Заходь: https://t.me/nzdiary_bot?start={user_id}"
+                "caption": f"🔥 Мій середній бал: {avg}! (Стиль: Default)\nХочеш побачити свої результати? Заходь: https://t.me/{BOT_USERNAME}?start={user_id}"
             }
-    except Exception as e:
+    except Exception:
         try:
             await wait_msg.delete()
-        except:
+        except Exception:
             pass
-        print(e)
+        logger.exception("Wrapped generation failed for user_id=%s", user_id)
         await message.answer("❌ Щось пішло не так. Спробуйте пізніше.")
 
 
@@ -449,9 +587,10 @@ async def generate_vip_wrapped(callback: CallbackQuery, state: FSMContext):
         photo_id = sent_msg.photo[-1].file_id
         WRAPPED_CACHE[user_id] = {
             "file_id": photo_id,
-            "caption": f"🔥 Мій середній бал: {data['avg_grade']}! (Стиль: {selected_style})\nХочеш побачити свої результати? Заходь: https://t.me/nzdiary_bot?start={user_id}"
+            "caption": f"🔥 Мій середній бал: {data['avg_grade']}! (Стиль: {selected_style})\nХочеш побачити свої результати? Заходь: https://t.me/{BOT_USERNAME}?start={user_id}"
         }
-    except Exception as e:
+    except Exception:
+        logger.exception("VIP wrapped generation failed for user_id=%s style=%s", callback.from_user.id, selected_style)
         await callback.message.answer("❌ Помилка генерації.")
 
     await state.clear()
@@ -540,12 +679,10 @@ async def turn_notify_grades(message: Message):
     user_id = message.from_user.id
     track_activity(user_id)
 
-    vip_flag, expires = db.get_vip_status(user_id)
-    now_ts = int(time.time())
-    is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-    if not is_vip:
+    if not _is_vip(user_id):
         await message.answer("🔒 Сповіщення про оцінки доступні лише VIP-користувачам.\n"
-                             "🎁 Хочеш VIP безкоштовно? Переглянь /vip")
+                             "🎁 Хочеш VIP безкоштовно? Запроси друга у /vip",
+                             reply_markup=vip_upsell_kb())
         return
 
     _, _, provider = db.get_user(user_id)
@@ -568,12 +705,10 @@ async def turn_notify_grades(message: Message):
 async def turn_notify(message: Message):
     user_id = message.from_user.id
     track_activity(user_id)
-    vip_flag, expires = db.get_vip_status(user_id)
-    now_ts = int(time.time())
-    is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-    if not is_vip:
+    if not _is_vip(user_id):
         await message.answer("🔒 Ця функція доступна лише VIP-користувачам.\n"
-                             "🎁 Хочеш VIP безкоштовно? Переглянь /vip")
+                             "🎁 Хочеш VIP безкоштовно? Запроси друга у /vip",
+                             reply_markup=vip_upsell_kb())
         return
     else:
         if db.user_notify(user_id):

@@ -1,4 +1,6 @@
 import os
+import asyncio
+import logging
 
 from dotenv import load_dotenv
 from google import genai
@@ -7,6 +9,7 @@ from PIL import Image
 import io
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are a concise tutor. Always use Ukrainian language as default for all answers.\n"
@@ -27,8 +30,13 @@ SYSTEM_PROMPT = (
 
 SYSTEM_INSTRUCTION = SYSTEM_PROMPT
 
-# The client gets the API key from the environment variable `GEMINI_API_KEY`.
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+if not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY is not set; AI requests will fail until it is configured")
+
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 def compress_image(image_bytes: bytes) -> bytes:
@@ -47,7 +55,22 @@ def compress_image(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
-async def ai(user_prompt: str, image_bytes: bytes | None = None) -> str:
+def _generate_content(contents, max_output_tokens: int):
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    return client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0.2,
+            max_output_tokens=max_output_tokens,
+        ),
+    )
+
+
+async def ai(user_prompt: str, image_bytes: bytes | None = None) -> tuple[str, int]:
     try:
         # если есть фото → мультимодал
         if image_bytes:
@@ -70,18 +93,15 @@ async def ai(user_prompt: str, image_bytes: bytes | None = None) -> str:
             # только текст
             contents = [user_prompt]
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-lite",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.2,
-                max_output_tokens=800 if not image_bytes else 1000,
-            ),
+        response = await asyncio.to_thread(
+            _generate_content,
+            contents,
+            800 if not image_bytes else 1000,
         )
         # --- Отслеживание токенов ---
         # Рахуємо токени
-        total_tokens = response.usage_metadata.total_token_count
+        usage = getattr(response, "usage_metadata", None)
+        total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
 
         text_response = (response.text or "").strip()
 
@@ -89,5 +109,5 @@ async def ai(user_prompt: str, image_bytes: bytes | None = None) -> str:
         return text_response, total_tokens
 
     except Exception as e:
-        print(e)
-        return ""
+        logger.exception("Gemini request failed: %s", e)
+        return "", 0

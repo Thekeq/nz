@@ -1,8 +1,43 @@
+import asyncio
 import time
 import re
+import logging
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, db, bot
 
+logger = logging.getLogger(__name__)
 DEFAULT_COOLDOWN = 5
+
+
+async def safe_send(user_id: int, text: str, disable_notify_on_block: bool = False, **kwargs) -> bool:
+    """Надсилає повідомлення з обробкою лімітів Telegram.
+
+    Повертає True, якщо надіслано. При флуд-ліміті чекає і повторює один раз.
+    Якщо юзер заблокував бота і disable_notify_on_block=True — вимикає йому
+    розсилки в БД, щоб не скрапити дневник даремно.
+    """
+    try:
+        await bot.send_message(user_id, text, **kwargs)
+        return True
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after + 1)
+        try:
+            await bot.send_message(user_id, text, **kwargs)
+            return True
+        except Exception:
+            logger.exception("Retry send failed for user_id=%s", user_id)
+            return False
+    except TelegramForbiddenError:
+        if disable_notify_on_block:
+            try:
+                db.disable_all_notify(user_id)
+                logger.info("User %s blocked the bot, notifications disabled", user_id)
+            except Exception:
+                logger.exception("Failed to disable notify for user_id=%s", user_id)
+        return False
+    except Exception:
+        logger.exception("send_message failed for user_id=%s", user_id)
+        return False
 
 
 async def user_can_call(user_id: int, action: str, cooldown: int = DEFAULT_COOLDOWN) -> bool:
@@ -22,8 +57,8 @@ async def user_can_call(user_id: int, action: str, cooldown: int = DEFAULT_COOLD
 def track_activity(user_id: int):
     try:
         db.add_activity(user_id)
-    except Exception as e:
-        print("activity error:", e)
+    except Exception:
+        logger.exception("Failed to track activity for user_id=%s", user_id)
 
 
 def clean_html(raw_html: str) -> str:
@@ -44,6 +79,10 @@ def fix_ai_response(text: str) -> str:
     return text
 
 
+REF_REWARD_DAYS = 3
+REF_MONTHLY_CAP = 3  # максимум нагород на 30 днів (= 9 днів VIP)
+
+
 async def process_referral_reward(user_id: int):
     if not db.try_mark_ref_rewarded(user_id):
         return
@@ -53,42 +92,42 @@ async def process_referral_reward(user_id: int):
         return
 
     count = db.add_invite_and_get(referrer_id, 1)
-
     need_invite = 1
 
-    if count >= need_invite and db.try_consume_invites(referrer_id, need_invite):
-        # 1. Додаємо days_to_add днів VIP
-        days_to_add = 3
-        db.set_vip(referrer_id, days_to_add)
+    if count < need_invite:
+        await safe_send(
+            referrer_id,
+            f"Ви запросили друга ✅\nПрогрес: {count}/{need_invite} до безкоштовного ВІП ⭐️"
+        )
+        return
 
-        # 2. Нараховуємо токени
-        MAX_TOKENS = 1000000
-        REWARD = 50000
+    # Місячний ліміт: без нього активний юзер отримує VIP безкоштовно
+    # вічно і ніколи не купує. Запрошення при цьому не згорає.
+    if db.count_recent_ref_grants(referrer_id, days=30) >= REF_MONTHLY_CAP:
+        await safe_send(
+            referrer_id,
+            "🎉 Твій друг приєднався! Але ліміт безкоштовного VIP на цей місяць "
+            f"вичерпано ({REF_MONTHLY_CAP * REF_REWARD_DAYS} днів).\n"
+            "Ліміт відновиться наступного місяця, а безліміт вже зараз — у /vip 😉"
+        )
+        return
 
-        current_tokens = db.get_tokens(referrer_id)
-        new_balance = min(current_tokens + REWARD, MAX_TOKENS)
-        db.set_tokens(referrer_id, new_balance)
+    if not db.try_consume_invites(referrer_id, need_invite):
+        return
 
-        # 3. Повідомляємо
-        try:
-            await bot.send_message(
-                referrer_id,
-                f"🎉 <b>Вітаємо! Твій друг приєднався!</b>\n\n"
-                f"⭐️ VIP продовжено на <b>{days_to_add} дні(в)</b>\n"
-                f"💎 Нараховано <b>{REWARD}</b> ШІ токенів\n"
-                f"💰 Ваш баланс: <b>{compact_num(new_balance)}/{compact_num(MAX_TOKENS)}</b> токенів",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-    else:
-        try:
-            await bot.send_message(
-                referrer_id,
-                f"Ви запросили друга ✅\nПрогрес: {count}/{need_invite} до безкоштовного ВІП ⭐️"
-            )
-        except Exception:
-            pass
+    # Реферальний VIP — «лайт»: нагадування, сповіщення про оцінки,
+    # розклад по днях. ШІ-токени та ексклюзивні теми — лише у платному.
+    db.set_vip(referrer_id, REF_REWARD_DAYS, source="ref")
+    db.add_ref_grant(referrer_id)
+
+    await safe_send(
+        referrer_id,
+        f"🎉 <b>Вітаємо! Твій друг приєднався!</b>\n\n"
+        f"⭐️ VIP продовжено на <b>{REF_REWARD_DAYS} дні(в)</b>\n"
+        f"⏰ Нагадування, 🔔 сповіщення про оцінки та 📅 розклад по днях — твої!\n"
+        f"✨ ШІ-асистент без лімітів і 🎨 ексклюзивні теми — у платному /vip",
+        parse_mode="HTML"
+    )
 
 
 def compact_num(num):

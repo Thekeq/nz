@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 import re
 import time
@@ -18,6 +19,7 @@ from keyboards import build_vip_kb, build_main_kb
 from services.finder import getsession, getinfo
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 # --- 👮‍♂️ ГОЛОВНЕ МЕНЮ АДМІНА ---
@@ -258,8 +260,8 @@ async def broadcast(message: Message):
         except TelegramForbiddenError:
             failed += 1  # Юзер заблокував бота
 
-        except Exception as e:
-            # print(f"Error sending to {uid}: {e}") # Можна розкоментувати для дебагу
+        except Exception:
+            logger.exception("Broadcast failed for user_id=%s", uid)
             failed += 1
 
     await message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
@@ -600,6 +602,8 @@ async def stats(message: Message):
     # 2. Отримання даних з БД
     stats_data = db.get_activity_summary(days=days)
     growth_labels, growth_data = db.get_daily_growth(days=days)
+    command_metrics = db.get_command_metrics(days=days, limit=8)
+    nz_metrics = db.get_nz_session_metrics(days=days)
 
     nz_verified = db.count_verified_by_provider("nz")
     human_verified = db.count_verified_by_provider("human")
@@ -610,6 +614,24 @@ async def stats(message: Message):
 
     # 4. Формування тексту
     # Лайфхак: використовуємо sum(growth_data) для тексту, щоб гарантувати збіг з графіком
+    command_lines = []
+    for item in command_metrics:
+        command_lines.append(
+            f"├ {item['command']}: {item['calls']}x, avg {item['avg_ms']}ms, err {item['errors']}"
+        )
+    if command_lines:
+        command_lines[-1] = command_lines[-1].replace("├", "└", 1)
+    else:
+        command_lines.append("└ ще немає даних")
+
+    cookie_reuse = nz_metrics.get("cookie_reuse", 0)
+    memory_hit = nz_metrics.get("memory_hit", 0)
+    memory_miss = nz_metrics.get("memory_miss", 0)
+    login_count = nz_metrics.get("login", 0)
+    expired_count = nz_metrics.get("cookie_expired", 0)
+    memory_total = memory_hit + memory_miss
+    memory_rate = round(memory_hit * 100 / memory_total, 1) if memory_total else 0
+
     text = (
         f"📊 <b>Аналітика Database</b>\n"
         f"📅 Період: {days} днів\n\n"
@@ -619,7 +641,14 @@ async def stats(message: Message):
         f"└ ✅ Human Valid: {human_verified}\n\n"
         f"📈 <b>Ріст:</b>\n"
         f"├ 🆕 Сьогодні: +{stats_data['new_today']}\n"
-        f"└ 🆕 За {days} днів: +{sum(growth_data)}\n"
+        f"└ 🆕 За {days} днів: +{sum(growth_data)}\n\n"
+        f"⚡ <b>NZ сесії:</b>\n"
+        f"├ reuse cookies: {cookie_reuse}\n"
+        f"├ login: {login_count}\n"
+        f"├ expired: {expired_count}\n"
+        f"└ memory hit: {memory_rate}% ({memory_hit}/{memory_total})\n\n"
+        f"🧭 <b>Топ дій:</b>\n"
+        f"{chr(10).join(command_lines)}"
     )
 
     # 5. Відправка
@@ -637,8 +666,8 @@ async def test(message: Message):
     if url.startswith('https://naurok.com.ua/test/testing/'):
         try:
             url = re.sub(r'/test/testing/', '/test/realtime-client/', url)
-        except Exception as e:
-            print(e)
+        except Exception:
+            logger.exception("Failed to normalize Naurok testing url")
     data = getsession(url)
     info = getinfo(data)
     await message.answer(f"Назва тесту: <i>{info}</i>", parse_mode="HTML")

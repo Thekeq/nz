@@ -1,18 +1,37 @@
 import asyncio
 import datetime
+import os
 import time
 import re
+import logging
 from html import escape
-from loader import db, bot, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE, KYIV_TZ, fernet
-from services.diarynz import get_diary_schedule, get_grade_events
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from loader import (
+    db, bot, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
+    USER_LAST_CALL, KYIV_TZ, fernet,
+)
+from services.diarynz import cleanup_session_cache, get_diary_schedule, get_grade_events
 from services.diaryhuman import get_diary_schedule_human
+from utils import safe_send
 import gc
+
+logger = logging.getLogger(__name__)
 
 LESSON_TIMES = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00"]
 LEAD_MIN = 5
 LESSON_LINE_RE = re.compile(
     r"^\s*\d+\.\s*(?:<i>)?(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})(?:</i>)?\s*(.+?):\s*(.+)\s*$"
 )
+
+# Кеш часів уроків Human на день: {user_id: {"date", "fetched_at", "lessons"}}.
+# Кешуємо тільки СТРУКТУРУ розкладу (коли уроки), а не посилання:
+# у вікні нагадування скрапимо заново, щоб зловити посилання,
+# яке вчитель додав в останній момент.
+HUMAN_SCHED_CACHE = {}
+HUMAN_REFRESH_SEC = 15 * 60  # періодичне оновлення — щоб побачити нові уроки
+
+BACKUP_DIR = "backups"
+BACKUP_KEEP = 7
 
 
 async def sleep_to_next_minute():
@@ -53,107 +72,162 @@ def _has_conf_link(s: str) -> bool:
 
 async def check_lessons():
     while True:
-        now = datetime.datetime.now(KYIV_TZ)
-        # берем всех сразу один раз в минуту
-        users = db.get_users_with_notify()  # [(user_id, login, enc_password, provider), ...]
+        users = db.get_users_with_notify()
+        now_ts = int(time.time())
 
+        tasks = []
         for user_id, login, enc_password, provider in users:
             try:
                 vip_flag, expires = db.get_vip_status(user_id)
-                now_ts = int(time.time())
                 is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
                 if not login or not enc_password or not is_vip:
                     continue
-
-                password = fernet.decrypt(enc_password.encode()).decode()
-
-                # ---------------- NZ ----------------
                 if provider == "nz":
-                    # тут твоя стара логика, но она должна жить отдельно от human
-                    for idx, lesson_time in enumerate(LESSON_TIMES, start=1):
-                        h, m = map(int, lesson_time.split(":"))
-                        lesson_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-                        notify_dt = lesson_dt - datetime.timedelta(minutes=LEAD_MIN)
-
-                        # 60 секундное окно
-                        if 0 <= (now - notify_dt).total_seconds() < 60:
-                            async with SEMAPHORE:
-                                schedule_text = await asyncio.to_thread(
-                                    get_diary_schedule, login, password, days=["сьогодні"]
-                                )
-                            # парсим строки "1. ...."
-                            lessons_list = []
-                            for line in schedule_text.splitlines():
-                                m2 = re.match(r"\d+\.\s*(.*)", line)
-                                if m2:
-                                    lessons_list.append(m2.group(1).strip())
-
-                            if len(lessons_list) >= idx:
-                                lesson_name = lessons_list[idx - 1]
-                                if ("https://meet.google.com" in lesson_name) or ("zoom.us" in lesson_name):
-                                    text = (
-                                        f"🔔 Нагадування: через {LEAD_MIN} хвилин починається "
-                                        f"<b>{lesson_name}</b> о <b>{lesson_time}</b>."
-                                    )
-                                    await bot.send_message(
-                                        user_id,
-                                        text,
-                                        parse_mode="HTML",
-                                        disable_web_page_preview=False
-                                    )
-                                    await asyncio.sleep(0.25)
-                            break  # NZ: за хвилину максимум 1 нагадування
-
-                # ---------------- HUMAN ----------------
+                    tasks.append(_check_lessons_nz(user_id, login, enc_password))
                 elif provider == "human":
-                    async with SEMAPHORE:
-                        schedule_text = await asyncio.to_thread(
-                            get_diary_schedule_human, login, password, ["сьогодні"]
-                        )
+                    tasks.append(_check_lessons_human(user_id, login, enc_password))
+            except Exception:
+                logger.exception("Failed to schedule lesson check for user_id=%s", user_id)
 
-                    lessons = parse_human_schedule_text(schedule_text)
-                    if not lessons:
-                        continue
-
-                    # уроки отсортированы? на всякий
-                    lessons.sort(key=lambda x: x["start"])
-
-                    for les in lessons:
-                        # les["start"] = "09:55"
-                        start_dt = build_dt_for_today(les["start"], now)
-                        notify_dt = start_dt - datetime.timedelta(minutes=LEAD_MIN)
-
-                        if 0 <= (now - notify_dt).total_seconds() < 60:
-                            link = les.get("link") or ""
-                            if not link or not _has_conf_link(link):
-                                break  # нет ссылки — нет смысла слать
-
-                            key = f"{now.date().isoformat()}|{les['start']}|{les['subject']}"
-                            if (user_id, key) in SENT_REMINDERS:
-                                break
-                            SENT_REMINDERS.add((user_id, key))
-
-                            text = (
-                                f"🔔 Нагадування: через {LEAD_MIN} хвилин починається "
-                                f"<b>{escape(les['subject'])}</b> о <b>{escape(les['start'])}</b>\n"
-                                f"{escape(link)}"
-                            )
-                            await bot.send_message(
-                                user_id,
-                                text,
-                                parse_mode="HTML",
-                                disable_web_page_preview=False
-                            )
-                            await asyncio.sleep(0.25)
-                            break  # за хвилину максимум 1 нагадування
-
-                else:
-                    continue
-
-            except Exception as e:
-                print(e)
+        if tasks:
+            # паралельно, щоб усі юзери встигали у вікно нагадування;
+            # навантаження на скрапінг обмежує SEMAPHORE усередині задач
+            await asyncio.gather(*tasks)
 
         await sleep_to_next_minute()
+
+
+async def _check_lessons_nz(user_id: int, login: str, enc_password: str):
+    """NZ: скрапимо тільки коли якийсь урок у вікні нагадування.
+    Скрап саме в момент перевірки (а не з ранкового кешу) — щоб побачити
+    посилання, яке вчитель додав за 10 хвилин до уроку."""
+    try:
+        now = datetime.datetime.now(KYIV_TZ)
+
+        target_idx = target_time = target_key = None
+        for idx, lesson_time in enumerate(LESSON_TIMES, start=1):
+            lesson_dt = build_dt_for_today(lesson_time, now)
+            notify_dt = lesson_dt - datetime.timedelta(minutes=LEAD_MIN)
+            # вікно аж до початку уроку: якщо тік запізнився, нагадування
+            # все одно піде, а дублі відсікає SENT_REMINDERS
+            if notify_dt <= now < lesson_dt:
+                key = f"nz|{now.date().isoformat()}|{lesson_time}"
+                if (user_id, key) not in SENT_REMINDERS:
+                    target_idx, target_time, target_key = idx, lesson_time, key
+                break
+
+        if target_idx is None:
+            return
+
+        password = fernet.decrypt(enc_password.encode()).decode()
+        async with SEMAPHORE:
+            schedule_text = await asyncio.to_thread(
+                get_diary_schedule,
+                login,
+                password,
+                days=["сьогодні"],
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
+
+        lessons_list = []
+        for line in schedule_text.splitlines():
+            m = re.match(r"\d+\.\s*(.*)", line)
+            if m:
+                lessons_list.append(m.group(1).strip())
+
+        if len(lessons_list) < target_idx:
+            return
+
+        lesson_name = lessons_list[target_idx - 1]
+        if not _has_conf_link(lesson_name):
+            return  # посилання ще нема — перевіримо наступної хвилини
+
+        text = (
+            f"🔔 Нагадування: через {LEAD_MIN} хвилин починається "
+            f"<b>{lesson_name}</b> о <b>{target_time}</b>."
+        )
+        if await safe_send(user_id, text, disable_notify_on_block=True,
+                           parse_mode="HTML", disable_web_page_preview=False):
+            SENT_REMINDERS.add((user_id, target_key))
+    except Exception:
+        logger.exception("NZ lesson reminder failed for user_id=%s", user_id)
+
+
+def _human_key(now: datetime.datetime, les: dict) -> str:
+    return f"human|{now.date().isoformat()}|{les['start']}|{les['subject']}"
+
+
+def _human_pending_window(lessons: list[dict], now: datetime.datetime, user_id: int) -> bool:
+    """Чи є урок, для якого зараз вікно нагадування і ще не слали."""
+    for les in lessons:
+        start_dt = build_dt_for_today(les["start"], now)
+        notify_dt = start_dt - datetime.timedelta(minutes=LEAD_MIN)
+        if notify_dt <= now < start_dt and (user_id, _human_key(now, les)) not in SENT_REMINDERS:
+            return True
+    return False
+
+
+async def _check_lessons_human(user_id: int, login: str, enc_password: str):
+    """Human: часи уроків беремо з денного кешу, скрапимо тільки коли
+    (1) кешу ще нема, (2) настав час планового оновлення, або
+    (3) якийсь урок у вікні нагадування — тоді скрап свіжий, і посилання,
+    додане в останній момент, не загубиться."""
+    try:
+        now = datetime.datetime.now(KYIV_TZ)
+        today = now.date().isoformat()
+        cache = HUMAN_SCHED_CACHE.get(user_id)
+
+        need_scrape = (
+            not cache
+            or cache["date"] != today
+            or (now.timestamp() - cache["fetched_at"]) >= HUMAN_REFRESH_SEC
+            or _human_pending_window(cache["lessons"], now, user_id)
+        )
+        if not need_scrape:
+            return
+
+        password = fernet.decrypt(enc_password.encode()).decode()
+        async with SEMAPHORE:
+            schedule_text = await asyncio.to_thread(
+                get_diary_schedule_human, login, password, ["сьогодні"]
+            )
+
+        lessons = parse_human_schedule_text(schedule_text)
+        lessons.sort(key=lambda x: x["start"])
+
+        HUMAN_SCHED_CACHE[user_id] = {
+            "date": today,
+            "fetched_at": now.timestamp(),
+            "lessons": [{"start": l["start"], "subject": l["subject"]} for l in lessons],
+        }
+
+        for les in lessons:
+            start_dt = build_dt_for_today(les["start"], now)
+            notify_dt = start_dt - datetime.timedelta(minutes=LEAD_MIN)
+            if not (notify_dt <= now < start_dt):
+                continue
+
+            link = les.get("link") or ""
+            if not link or not _has_conf_link(link):
+                continue  # посилання ще нема — перевіримо наступної хвилини
+
+            key = _human_key(now, les)
+            if (user_id, key) in SENT_REMINDERS:
+                continue
+
+            text = (
+                f"🔔 Нагадування: через {LEAD_MIN} хвилин починається "
+                f"<b>{escape(les['subject'])}</b> о <b>{escape(les['start'])}</b>\n"
+                f"{escape(link)}"
+            )
+            if await safe_send(user_id, text, disable_notify_on_block=True,
+                               parse_mode="HTML", disable_web_page_preview=False):
+                SENT_REMINDERS.add((user_id, key))
+            await asyncio.sleep(0.25)
+    except Exception:
+        logger.exception("Human lesson reminder failed for user_id=%s", user_id)
 
 
 async def check_grades():
@@ -172,7 +246,15 @@ async def check_grades():
                 password = fernet.decrypt(enc_password.encode()).decode()
 
                 async with SEMAPHORE:
-                    events = await asyncio.to_thread(get_grade_events, login, password, 20)
+                    events = await asyncio.to_thread(
+                        get_grade_events,
+                        login,
+                        password,
+                        20,
+                        user_id=user_id,
+                        db=db,
+                        fernet=fernet
+                    )
 
                 if not events:
                     continue
@@ -196,35 +278,124 @@ async def check_grades():
                     sent = new_events[:10]
                     for ev in sent:
                         lines.append(f"• <b>{ev['name']}</b>:\n{ev['text']}")
-                    await bot.send_message(user_id, "\n\n".join(lines), disable_web_page_preview=True)
 
-                    db.set_last_grade_hashes(user_id, [e["hash"] for e in events[:3]])
+                    # хеши фиксируем только после успешной отправки:
+                    # если Telegram не принял — попробуем в следующем цикле
+                    if await safe_send(user_id, "\n\n".join(lines),
+                                       disable_notify_on_block=True,
+                                       disable_web_page_preview=True):
+                        db.set_last_grade_hashes(user_id, [e["hash"] for e in events[:3]])
                     await asyncio.sleep(0.25)
 
             except Exception:
-                pass
+                logger.exception("Grade notification check failed for user_id=%s provider=%s", user_id, provider)
 
         await asyncio.sleep(60 * 10)
 
 
 async def memory_cleaner_task():
-    """Фоновая задача для очистки оперативной памяти"""
+    """Фонова задача для очистки оперативної пам'яті та застарілих записів."""
     while True:
         await asyncio.sleep(3600)  # Запускаем раз в 1 час (3600 сек)
 
-        # 1. Очистка кеша Wrapped (он нужен только "здесь і зараз")
-        # Если юзер захочет поделиться через час - сгенерирует заново.
-        if WRAPPED_CACHE:
-            WRAPPED_CACHE.clear()
+        # 1. Кеші "тут і зараз": якщо юзер захоче через годину — згенерує заново
+        WRAPPED_CACHE.clear()
+        HW_AI_CACHE.clear()
+        cleanup_session_cache()
 
-        if HW_AI_CACHE:
-            HW_AI_CACHE.clear()
-        # 2. Очистка SENT_REMINDERS (только ночью, например, в 04:00 утра)
         now = datetime.datetime.now(KYIV_TZ)
-        if now.hour == 4:
-            if SENT_REMINDERS:
-                SENT_REMINDERS.clear()
+        today = now.date().isoformat()
 
-        # 3. Принудительный сбор мусора (самое важное для PythonAnywhere)
+        # 2. SENT_REMINDERS: ключі формату "provider|YYYY-MM-DD|..." —
+        # прибираємо все, що не за сьогодні
+        stale = {
+            item for item in SENT_REMINDERS
+            if len(item[1].split("|")) < 2 or item[1].split("|")[1] != today
+        }
+        SENT_REMINDERS.difference_update(stale)
+
+        # 3. Кеш розкладу Human за минулі дні
+        for uid in [uid for uid, c in HUMAN_SCHED_CACHE.items() if c["date"] != today]:
+            HUMAN_SCHED_CACHE.pop(uid, None)
+
+        # 4. Рейт-ліміти, старші за годину (інакше словник росте безмежно)
+        cutoff = time.time() - 3600
+        for key in [k for k, ts in USER_LAST_CALL.items() if ts < cutoff]:
+            USER_LAST_CALL.pop(key, None)
+
+        # 5. Завислі FSM-стани (юзер кинув авторизацію і пішов)
+        try:
+            db.fsm_purge_older_than(48 * 3600)
+        except Exception:
+            logger.exception("FSM purge failed")
+
+        # 6. Принудительный сбор мусора (самое важное для PythonAnywhere)
         # Это удаляет "висячие" объекты картинок и буферов
         gc.collect()
+
+
+WINBACK_GRACE_SEC = 48 * 3600  # тримати синхронно з handlers/vip.py
+
+
+async def vip_expiry_task():
+    """Воронка закінчення VIP: нагадування за ~добу до кінця
+    і win-back знижка протягом 48 годин після."""
+    while True:
+        try:
+            for user_id, expires in db.get_vips_expiring_within(24 * 3600):
+                if await safe_send(
+                    user_id,
+                    "⏳ <b>Твій VIP закінчується завтра!</b>\n"
+                    "Після цього вимкнуться ⏰ нагадування перед уроками "
+                    "і 🔔 сповіщення про оцінки.\n\n"
+                    "Продовжити: /vip",
+                    disable_notify_on_block=True,
+                    parse_mode="HTML"
+                ):
+                    db.set_expiry_stage(user_id, 1)
+                await asyncio.sleep(0.25)
+
+            winback_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔥 Місяць за 50 ⭐️ (-33%)", callback_data="buy_winback")]
+            ])
+            for user_id, expires in db.get_vips_just_expired(WINBACK_GRACE_SEC):
+                if await safe_send(
+                    user_id,
+                    "😔 <b>VIP закінчився</b> — нагадування і сповіщення вимкнено.\n\n"
+                    "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>",
+                    disable_notify_on_block=True,
+                    parse_mode="HTML",
+                    reply_markup=winback_kb
+                ):
+                    db.set_expiry_stage(user_id, 2)
+                    db.record_command_metric("funnel:winback_sent", 0)
+                await asyncio.sleep(0.25)
+        except Exception:
+            logger.exception("VIP expiry check failed")
+
+        await asyncio.sleep(3600)
+
+
+async def daily_backup_task():
+    """Щоденний бекап бази о ~03:30: там платні підписки, втрачати не можна."""
+    while True:
+        now = datetime.datetime.now(KYIV_TZ)
+        nxt = now.replace(hour=3, minute=30, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += datetime.timedelta(days=1)
+        await asyncio.sleep((nxt - now).total_seconds())
+
+        try:
+            os.makedirs(BACKUP_DIR, exist_ok=True)
+            dest = os.path.join(BACKUP_DIR, f"data-{datetime.date.today().isoformat()}.db")
+            await asyncio.to_thread(db.backup_to, dest)
+
+            files = sorted(
+                f for f in os.listdir(BACKUP_DIR)
+                if f.startswith("data-") and f.endswith(".db")
+            )
+            for old in files[:-BACKUP_KEEP]:
+                os.remove(os.path.join(BACKUP_DIR, old))
+            logger.info("DB backup created: %s", dest)
+        except Exception:
+            logger.exception("DB backup failed")
