@@ -6,28 +6,32 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=cookie
-Group=cookie
-WorkingDirectory=/home/cookie/nz
+# Окремий системний користувач без shell: бот ходить в інтернет
+# і скрапить сайти, рутові права йому не потрібні
+User=nzbot
+Group=nzbot
+WorkingDirectory=/opt/nz/app
 
-# Логи йдуть у journald без буферизації, інакше print/logging
-# зависають у буфері й не видно, що бот живий
+# Логи йдуть у journald без буферизації, інакше logging
+# зависає в буфері й не видно, що бот живий
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/cookie/nz/.venv/bin/python main.py
+ExecStart=/opt/nz/venv/bin/python main.py
 
 # Бот має підніматись сам після падіння, OOM або перезавантаження VPS
 Restart=always
 RestartSec=10
 
-# Якщо бот падає в циклі — не довбити Telegram нескінченно
+# Якщо падає в циклі — не довбити Telegram нескінченно
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
-# Мінімальне посилення: /usr, /boot, /etc — тільки читання.
-# ProtectHome НЕ вмикаємо: data.db і backups/ лежать у /home/cookie/nz
+# Мінімальне посилення
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
+ProtectHome=true
+# data.db, WAL-файли і backups/ лежать тут — потрібен запис
+ReadWritePaths=/opt/nz/app
 
 [Install]
 WantedBy=multi-user.target

@@ -4,7 +4,9 @@
 працювати не можуть** — Telegram віддасть `409 Conflict`, і оновлення почнуть
 губитись. Тому старий інстанс на PythonAnywhere треба зупинити ДО запуску нового.
 
-Приклади нижче для користувача `cookie` і теки `/home/cookie/nz`.
+Розкладка збігається з іншими проєктами на цьому сервері:
+код у `/opt/nz/app`, venv у `/opt/nz/venv`, окремий системний
+користувач `nzbot` без shell.
 
 ---
 
@@ -41,14 +43,14 @@ timedatectl
 ## 3. Викласти код
 
 ```bash
-sudo -iu cookie          # якщо зайшов як root
-cd ~
-git clone https://github.com/Thekeq/nz.git
-cd nz
+useradd --system --home /opt/nz --shell /usr/sbin/nologin nzbot
 
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements.txt
+mkdir -p /opt/nz
+git clone https://github.com/Thekeq/nz.git /opt/nz/app
+
+python3 -m venv /opt/nz/venv
+/opt/nz/venv/bin/pip install --upgrade pip
+/opt/nz/venv/bin/pip install -r /opt/nz/app/requirements.txt
 ```
 
 ## 4. Залити секрети й базу
@@ -56,14 +58,15 @@ python3 -m venv .venv
 З локальної машини (Git Bash / PowerShell):
 
 ```bash
-scp .env    cookie@СЕРВЕР:/home/cookie/nz/.env
-scp data.db cookie@СЕРВЕР:/home/cookie/nz/data.db
+scp .env    root@СЕРВЕР:/opt/nz/app/.env
+scp data.db root@СЕРВЕР:/opt/nz/app/data.db
 ```
 
 Права на секрети — тільки власнику:
 
 ```bash
-chmod 600 /home/cookie/nz/.env /home/cookie/nz/data.db
+chown -R nzbot:nzbot /opt/nz
+chmod 600 /opt/nz/app/.env /opt/nz/app/data.db
 ```
 
 ## 5. Перевірити запуск руками
@@ -71,8 +74,8 @@ chmod 600 /home/cookie/nz/.env /home/cookie/nz/data.db
 Перед systemd — переконатись, що бот взагалі стартує:
 
 ```bash
-cd /home/cookie/nz
-.venv/bin/python main.py
+cd /opt/nz/app
+/opt/nz/venv/bin/python main.py
 ```
 
 Очікувано в логах: `Bot starting`. Напиши боту `/start` — має відповісти.
@@ -84,7 +87,7 @@ cd /home/cookie/nz
 ## 6. Systemd-сервіс
 
 ```bash
-sudo cp /home/cookie/nz/deploy/nz-bot.service /etc/systemd/system/
+sudo cp /opt/nz/app/deploy/nz-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nz-bot
 
@@ -99,21 +102,21 @@ journalctl -u nz-bot -f          # живі логи
 ## Оновлення після пушу в git
 
 ```bash
-cd /home/cookie/nz
+cd /opt/nz/app
 git pull
-.venv/bin/pip install -r requirements.txt   # якщо змінювались залежності
+/opt/nz/venv/bin/pip install -q -r requirements.txt   # якщо змінювались залежності
 sudo systemctl restart nz-bot
 ```
 
 ## Бекапи
 
-Бот сам робить копію бази щодня о 03:30 у `/home/cookie/nz/backups/`
+Бот сам робить копію бази щодня о 03:30 у `/opt/nz/app/backups/`
 (зберігає 7 останніх). Це копії **на тому ж диску** — вони рятують від
 кривої міграції чи випадкового видалення, але не від смерті VPS.
 Раз на тиждень варто забирати копію до себе:
 
 ```bash
-scp cookie@СЕРВЕР:/home/cookie/nz/backups/data-*.db ./
+scp root@СЕРВЕР:/opt/nz/app/backups/data-*.db ./
 ```
 
 ## Якщо щось пішло не так
