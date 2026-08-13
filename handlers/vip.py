@@ -79,7 +79,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"👕 /wrapped — <b>Ексклюзивні теми (Matrix, Gold, Ocean)</b>\n"
             f"📅 /diary_days (/diary) — <b>Перегляд розкладу по дням</b>\n"
             f"📊 /avg_grades — <b>Розумний прогноз оцінок, рейтинг предметів, діаграма-павутинка</b>\n"
-            f"🌅 <b>Ранковий дайджест о 7:30 щодня</b>\n"
+            f"🌅 /notify_digest — <b>Ранковий дайджест о 7:30 щодня</b>\n"
             f"⏰ /notify — <b>Нагадування перед уроками</b>\n"
             f"🔔 /notify_grades — <b>Сповіщення о нових оцінках (nz)</b>\n"
             f"📕 /notify_homework — <b>Сповіщення про нове ДЗ (nz)</b>\n"
@@ -99,7 +99,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання: https://t.me/{BOT_USERNAME}?start={user_id}\n\n"
             f"⭐️ <b>Перелік VIP-Функцій:</b>\n"
-            f"🌅 Ранковий дайджест о 7:30 <b>щодня</b> (без VIP — раз на тиждень)\n"
+            f"🌅 Ранковий дайджест о 7:30 <b>щодня</b> (без VIP — по понеділках)\n"
             f"🎨 Ексклюзивні теми (Matrix, Gold, Ocean)\n"
             f"✨ ШІ-асистент без тижневих лімітів\n"
             f"📅 Перегляд розкладу по дням\n"
@@ -702,6 +702,35 @@ async def turn_notify_grades(message: Message):
             await message.answer("✅ Сповіщення про нові оцінки увімкнені!")
         else:
             await message.answer("❌ Сповіщення про нові оцінки вимкнені!")
+
+
+@router.message(Command("notify_digest"))
+async def turn_notify_digest(message: Message):
+    """Дайджест — opt-in для всіх: VIP отримує щодня, решта по понеділках."""
+    user_id = message.from_user.id
+    track_activity(user_id)
+
+    if not db.has_credentials(user_id):
+        await message.answer("Спочатку увійди у щоденник — /login")
+        return
+
+    if db.toggle_notify_digest(user_id):
+        if _is_vip(user_id):
+            await message.answer(
+                "✅ Ранковий дайджест увімкнено!\n"
+                "О 7:30 надішлю розклад, ДЗ і посилання на перший онлайн-урок.\n"
+                "<i>У дні без уроків нічого не приходить.</i>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "✅ Дайджест увімкнено — надсилатиму <b>по понеділках</b> о 7:30.\n"
+                "⭐️ Щоденний дайджест — у /vip",
+                parse_mode="HTML",
+                reply_markup=vip_upsell_kb()
+            )
+    else:
+        await message.answer("❌ Ранковий дайджест вимкнено.")
 
 
 @router.message(Command("notify_homework"))

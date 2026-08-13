@@ -192,6 +192,8 @@ class DataBase:
                 "ALTER TABLE subs ADD COLUMN ai_free_used INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE subs ADD COLUMN ai_free_week INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE subs ADD COLUMN notify_homework INTEGER NOT NULL DEFAULT 0",
+                # дайджест — opt-in: за замовчуванням вимкнений, щоб не спамити
+                "ALTER TABLE subs ADD COLUMN notify_digest INTEGER NOT NULL DEFAULT 0",
             ):
                 try:
                     self.connection.execute(ddl)
@@ -913,10 +915,33 @@ class DataBase:
 
     # ===== Ранковий дайджест =====
 
+    def toggle_notify_digest(self, user_id: int) -> bool:
+        self.ensure_user(user_id)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT notify_digest FROM subs WHERE user_id=?", (user_id,)
+            ).fetchone()
+            new_val = 0 if (int(row[0] or 0) if row else 0) == 1 else 1
+            self.connection.execute(
+                """
+                INSERT INTO subs(user_id, notify_digest) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET notify_digest=excluded.notify_digest
+                """,
+                (user_id, new_val)
+            )
+        return bool(new_val)
+
+    def user_notify_digest(self, user_id: int) -> bool:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT notify_digest FROM subs WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return bool(int(row[0] or 0)) if row else False
+
     def get_digest_recipients(self, active_days: int = 14):
-        """Користувачі з підтвердженими кредами, активні за останні active_days.
-        Фільтр по активності не дає скрапити мертві акаунти щоранку.
-        Повертає (user_id, login, password, provider, is_vip)."""
+        """Хто підписаний на дайджест, має підтверджені креди і був активний
+        за останні active_days. Фільтр по активності не дає скрапити мертві
+        акаунти щоранку. Повертає (user_id, login, password, provider, is_vip)."""
         min_day = datetime.date.today().toordinal() - active_days
         now_ts = int(datetime.datetime.now().timestamp())
         with self.connection:
@@ -928,6 +953,7 @@ class DataBase:
                 LEFT JOIN subs s ON s.user_id=c.user_id
                 WHERE c.login IS NOT NULL AND c.password IS NOT NULL
                   AND c.verified=1
+                  AND COALESCE(s.notify_digest,0)=1
                   AND EXISTS (
                       SELECT 1 FROM activity a
                       WHERE a.user_id=c.user_id AND a.day >= ?

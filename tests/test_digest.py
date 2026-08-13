@@ -1,8 +1,11 @@
 import importlib.util
 import unittest
 
+import datetime
+
 from services.digest import (
     has_lessons, has_conf_link, first_conf_link, build_digest_text, homework_hash,
+    is_school_time,
 )
 
 # новий формат рядка NZ: предмет-посилання замість «голого» URL
@@ -63,6 +66,39 @@ class FirstConfLinkTests(unittest.TestCase):
     def test_link_is_not_polluted_by_markup(self):
         text = '1. Фізика: <a href="https://meet.google.com/xyz-abcd-efg">тут</a>'
         self.assertEqual(first_conf_link(text), "https://meet.google.com/xyz-abcd-efg")
+
+
+class SchoolTimeTests(unittest.TestCase):
+    """Якщо це вікно інвертувати — нагадування мовчки перестануть приходити,
+    і помітять це тільки користувачі. Тому перевіряємо межі явно."""
+
+    @staticmethod
+    def _at(day: int, hour: int):
+        # 2026-09-07 — понеділок, тож day=7..13 покриває цілий тиждень
+        return datetime.datetime(2026, 9, day, hour, 0)
+
+    def test_school_hours_on_weekday(self):
+        self.assertTrue(is_school_time(self._at(7, 8)))    # понеділок 08:00
+        self.assertTrue(is_school_time(self._at(11, 13)))  # пʼятниця 13:00
+
+    def test_boundaries(self):
+        self.assertTrue(is_school_time(self._at(7, 6)))    # рівно 06:00 — вже так
+        self.assertFalse(is_school_time(self._at(7, 5)))   # 05:59 — ще ні
+        self.assertTrue(is_school_time(self._at(7, 15)))   # 15:xx — ще так
+        self.assertFalse(is_school_time(self._at(7, 16)))  # рівно 16:00 — вже ні
+
+    def test_night_is_idle(self):
+        self.assertFalse(is_school_time(self._at(7, 2)))
+        self.assertFalse(is_school_time(self._at(7, 23)))
+
+    def test_weekend_is_idle_even_at_noon(self):
+        self.assertFalse(is_school_time(self._at(12, 12)))  # субота
+        self.assertFalse(is_school_time(self._at(13, 12)))  # неділя
+
+    def test_last_lesson_reminder_window_is_covered(self):
+        """Останній урок о 14:00, нагадування о 13:55 — має потрапляти у вікно."""
+        self.assertTrue(is_school_time(self._at(7, 13)))
+        self.assertTrue(is_school_time(self._at(7, 14)))
 
 
 class AnchorFormatTests(unittest.TestCase):

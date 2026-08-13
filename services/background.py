@@ -15,7 +15,7 @@ from services.diarynz import (
     get_diary_homework, get_homework_events,
 )
 from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human
-from services.digest import has_lessons, has_conf_link, build_digest_text
+from services.digest import has_lessons, has_conf_link, build_digest_text, is_school_time
 from utils import safe_send
 import gc
 
@@ -30,6 +30,8 @@ LESSON_LINE_RE = re.compile(
 DIGEST_HOUR = 7
 DIGEST_MINUTE = 30
 DIGEST_ACTIVE_DAYS = 14  # кого вважаємо живим і варто скрапити щоранку
+
+IDLE_SLEEP_SEC = 5 * 60
 
 # Кеш часів уроків Human на день: {user_id: {"date", "fetched_at", "lessons"}}.
 # Кешуємо тільки СТРУКТУРУ розкладу (коли уроки), а не посилання:
@@ -76,6 +78,12 @@ def build_dt_for_today(hhmm: str, now: datetime.datetime) -> datetime.datetime:
 
 async def check_lessons():
     while True:
+        # Поза шкільним часом навіть не ходимо в БД: раніше цикл щохвилини
+        # будив усіх користувачів цілодобово, включно з канікулами й ніччю
+        if not is_school_time(datetime.datetime.now(KYIV_TZ)):
+            await asyncio.sleep(IDLE_SLEEP_SEC)
+            continue
+
         users = db.get_users_with_notify()
         now_ts = int(time.time())
 
@@ -439,6 +447,11 @@ async def morning_digest_task():
 async def check_homework():
     """Пуш про НОВЕ ДЗ. Тільки NZ: у Human інша структура і 30 юзерів."""
     while True:
+        # ДЗ задають протягом навчального дня — вночі й на вихідних не скрапимо
+        if not is_school_time(datetime.datetime.now(KYIV_TZ)):
+            await asyncio.sleep(IDLE_SLEEP_SEC)
+            continue
+
         for user_id, login, enc_password, provider in db.get_users_with_homework_notify():
             try:
                 if provider != "nz" or not login or not enc_password:

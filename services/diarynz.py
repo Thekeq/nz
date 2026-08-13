@@ -23,6 +23,10 @@ _SESSION_LOCKS: dict[int, threading.RLock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
 _SCRAPER_CACHE: dict[int, dict] = {}
 _SCRAPER_CACHE_TTL = 20 * 60
+# Кожен scraper тримає TCP-з'єднання і Cloudflare-кліренс у пам'яті.
+# На VPS з 1 ГБ RAM необмежений кеш — прямий шлях до OOM у години пік,
+# тому витісняємо найдавніше використані.
+_SCRAPER_CACHE_MAX = 40
 _INFLIGHT_CALLS: dict[tuple, Future] = {}
 _INFLIGHT_GUARD = threading.Lock()
 
@@ -216,6 +220,18 @@ def _get_scraper(user_id: int | None):
 
         scraper = cloudscraper.create_scraper()
         _SCRAPER_CACHE[user_id] = {"scraper": scraper, "last_used": now}
+
+        # витісняємо найдавніше використані, поки не влізе в ліміт
+        while len(_SCRAPER_CACHE) > _SCRAPER_CACHE_MAX:
+            oldest_id = min(_SCRAPER_CACHE, key=lambda uid: _SCRAPER_CACHE[uid]["last_used"])
+            if oldest_id == user_id:
+                break
+            evicted = _SCRAPER_CACHE.pop(oldest_id)
+            try:
+                evicted["scraper"].close()
+            except Exception:
+                pass
+
         return scraper, False
 
 

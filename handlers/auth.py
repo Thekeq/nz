@@ -106,7 +106,8 @@ async def process_password(message: Message, state: FSMContext):
                 await message.answer(
                     "🎁 <b>Дарую VIP на 3 дні — спробуй все:</b>\n\n"
                     "✨ ШІ-асистент (50k токенів вже на балансі)\n"
-                    "⏰ /notify — нагадування перед уроками зі ссилкою на мит\n"
+                    "🌅 /notify_digest — ранковий дайджест о 7:30\n"
+                    "⏰ /notify — нагадування перед уроками з посиланням на мит\n"
                     "🔔 /notify_grades — сповіщення про нові оцінки\n"
                     "🎨 /wrapped — ексклюзивні теми звіту",
                     parse_mode="HTML"

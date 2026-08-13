@@ -13,6 +13,20 @@ CONF_LINK_RE = re.compile(r"https://(?:meet\.google\.com|[\w.-]*zoom\.us)/[^\s<\
 LESSON_ROW_RE = re.compile(r"\s*\d+\.\s*\S")
 
 
+# Вікно, коли фонові перевірки уроків/ДЗ мають сенс.
+# Останній урок починається о 14:00, тож після 16:00 і до 6:00,
+# а також на вихідних, скрапити нема чого.
+ACTIVE_FROM_HOUR = 6
+ACTIVE_TO_HOUR = 16
+
+
+def is_school_time(now, from_hour: int = ACTIVE_FROM_HOUR, to_hour: int = ACTIVE_TO_HOUR) -> bool:
+    """Робочий день і години, коли можуть бути уроки. `now` — aware datetime Києва."""
+    if now.weekday() >= 5:
+        return False
+    return from_hour <= now.hour < to_hour
+
+
 def homework_hash(subject: str, hw: str) -> str:
     """Ідентифікатор ДЗ для дедуплікації сповіщень.
 

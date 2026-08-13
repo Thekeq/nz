@@ -97,3 +97,33 @@ class DataBaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DigestOptInTests(unittest.TestCase):
+    """Дайджест — opt-in. За замовчуванням вимкнений, інакше бот
+    розсилає ранкові повідомлення тим, хто про це не просив."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+        self.db.add_user(1, "login", "encpw", provider="nz")
+        self.db.set_creds_verified(1, 1)
+        self.db.add_activity(1)
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_digest_is_off_by_default(self):
+        self.assertFalse(self.db.user_notify_digest(1))
+        self.assertEqual(self.db.get_digest_recipients(), [])
+
+    def test_toggle_on_adds_to_recipients(self):
+        self.assertTrue(self.db.toggle_notify_digest(1))
+        recipients = self.db.get_digest_recipients()
+        self.assertEqual([r[0] for r in recipients], [1])
+
+    def test_toggle_off_removes_from_recipients(self):
+        self.db.toggle_notify_digest(1)
+        self.assertFalse(self.db.toggle_notify_digest(1))
+        self.assertEqual(self.db.get_digest_recipients(), [])
