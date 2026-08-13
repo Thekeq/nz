@@ -1,9 +1,27 @@
 import io
 import os
 import logging
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
+
+# Шляхи рахуємо від файлу, а не від робочої теки процесу.
+# Раніше було "nz/fonts/...", що працювало лише коли бота запускали
+# з батьківської теки проєкту. Під systemd (WorkingDirectory=/opt/nz/app)
+# шрифти не знаходились, PIL мовчки падав на load_default() — і Wrapped
+# виходив із крихітним битмап-шрифтом.
+BASE_DIR = Path(__file__).resolve().parent.parent
+FONTS_DIR = BASE_DIR / "fonts"
+ICONS_DIR = BASE_DIR / "icons"
+
+
+def font_path(name: str) -> str:
+    return str(FONTS_DIR / name)
+
+
+def icon_path_for(name: str) -> str:
+    return str(ICONS_DIR / name)
 
 # --- НАЛАШТУВАННЯ СТИЛІВ ---
 THEMES = {
@@ -86,12 +104,15 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
 
     # 3. Шрифти (без змін)
     try:
-        font_title = ImageFont.truetype("nz/fonts/Montserrat-Bold.ttf", 80)
-        font_big = ImageFont.truetype("nz/fonts/Montserrat-ExtraBold.ttf", 250)
-        font_med = ImageFont.truetype("nz/fonts/Montserrat-SemiBold.ttf", 70)
-        font_small = ImageFont.truetype("nz/fonts/Montserrat-Regular.ttf", 50)
-        font_footer = ImageFont.truetype("nz/fonts/Montserrat-Light.ttf", 40)
-    except IOError:
+        font_title = ImageFont.truetype(font_path("Montserrat-Bold.ttf"), 80)
+        font_big = ImageFont.truetype(font_path("Montserrat-ExtraBold.ttf"), 250)
+        font_med = ImageFont.truetype(font_path("Montserrat-SemiBold.ttf"), 70)
+        font_small = ImageFont.truetype(font_path("Montserrat-Regular.ttf"), 50)
+        font_footer = ImageFont.truetype(font_path("Montserrat-Light.ttf"), 40)
+    except OSError:
+        # Гучно, а не мовчки: load_default() дає битмап-шрифт ~10px,
+        # картинка формально генерується, але виглядає зламаною
+        logger.exception("Montserrat fonts not found in %s — fallback to bitmap font", FONTS_DIR)
         font_title = ImageFont.load_default()
         font_big = ImageFont.load_default()
         font_med = ImageFont.load_default()
@@ -153,7 +174,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
         y=1100,
         text=f"Оцінок отримано: {lessons_count}",
         font=font_med,
-        icon_path="nz/icons/book.png",
+        icon_path=icon_path_for("book.png"),
         color=theme["text_color"]
     )
 
@@ -162,7 +183,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
         y=1300,
         text="Найкращий предмет",
         font=font_small,
-        icon_path="nz/icons/crown.png",
+        icon_path=icon_path_for("crown.png"),
         color=theme["accent_color"]  # Використовуємо акцентний колір (золотий/неон/тощо)
     )
 
@@ -178,7 +199,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
         y=H - 150,
         text=footer_text,
         font=font_footer,
-        icon_path="nz/icons/diamond.png" if is_vip else None,
+        icon_path=icon_path_for("diamond.png") if is_vip else None,
         icon_size=40,
         color=(150, 150, 150)
     )
