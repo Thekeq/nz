@@ -1,0 +1,33 @@
+[Unit]
+Description=NZ/Human diary Telegram bot
+Documentation=https://github.com/Thekeq/nz
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cookie
+Group=cookie
+WorkingDirectory=/home/cookie/nz
+
+# Логи йдуть у journald без буферизації, інакше print/logging
+# зависають у буфері й не видно, що бот живий
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/cookie/nz/.venv/bin/python main.py
+
+# Бот має підніматись сам після падіння, OOM або перезавантаження VPS
+Restart=always
+RestartSec=10
+
+# Якщо бот падає в циклі — не довбити Telegram нескінченно
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Мінімальне посилення: /usr, /boot, /etc — тільки читання.
+# ProtectHome НЕ вмикаємо: data.db і backups/ лежать у /home/cookie/nz
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

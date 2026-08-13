@@ -333,8 +333,8 @@ async def memory_cleaner_task():
         except Exception:
             logger.exception("FSM purge failed")
 
-        # 6. Принудительный сбор мусора (самое важное для PythonAnywhere)
-        # Это удаляет "висячие" объекты картинок и буферов
+        # 6. Примусовий збір сміття — прибирає «висячі» об'єкти
+        # картинок і буферів, важливо на VPS з малим обсягом RAM
         gc.collect()
 
 
