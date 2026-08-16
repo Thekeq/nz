@@ -30,6 +30,14 @@ SYSTEM_PROMPT = (
 
 SYSTEM_INSTRUCTION = SYSTEM_PROMPT
 
+class AIUnavailable(Exception):
+    """Проблема на нашому боці: немає ключа, вичерпані кредити, впав API.
+
+    Відрізняється від «модель не змогла відповісти»: у цьому випадку
+    користувач не винен, і безкоштовний запит йому треба повернути.
+    """
+
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
@@ -57,7 +65,7 @@ def compress_image(image_bytes: bytes) -> bytes:
 
 def _generate_content(contents, max_output_tokens: int):
     if client is None:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
+        raise AIUnavailable("GEMINI_API_KEY is not configured")
 
     return client.models.generate_content(
         model=GEMINI_MODEL,
@@ -121,6 +129,19 @@ async def ai(user_prompt: str, image_bytes: bytes | None = None) -> tuple[str, i
         # ВАЖЛИВО: Повертаємо кортеж (текст, витрати)
         return text_response, total_tokens
 
+    except AIUnavailable:
+        raise
     except Exception as e:
         logger.exception("Gemini request failed: %s", e)
+
+        # 429 (вичерпані кредити / rate limit), 401/403 (ключ), 5xx — це наші
+        # проблеми, а не «поганий запит». Кажемо про це чесно й повертаємо
+        # користувачу безкоштовний запит.
+        status = getattr(e, "code", None) or getattr(e, "status_code", None)
+        if status in (401, 403, 429, 500, 502, 503, 504):
+            raise AIUnavailable(str(e)) from e
+        if any(marker in str(e).upper() for marker in
+               ("RESOURCE_EXHAUSTED", "UNAUTHENTICATED", "PERMISSION_DENIED", "UNAVAILABLE")):
+            raise AIUnavailable(str(e)) from e
+
         return "", 0

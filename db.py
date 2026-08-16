@@ -720,6 +720,14 @@ class DataBase:
             )
             return cur.rowcount == 1
 
+    def refund_free_ai(self, user_id: int):
+        """Повертає списаний безкоштовний запит, якщо ШІ впав не з вини юзера."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET ai_free_used = MAX(0, ai_free_used - 1) WHERE user_id=?",
+                (user_id,)
+            )
+
     # ===== Ліміт реферальних нагород =====
 
     def add_ref_grant(self, referrer_id: int):

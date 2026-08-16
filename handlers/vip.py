@@ -16,11 +16,11 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import texts
-from loader import db, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
+from loader import db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
 from utils import track_activity, fix_ai_response, user_can_call, compact_num, answer_long
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
-from services.ai import ai
+from services.ai import ai, AIUnavailable
 from services.drawer import draw_wrapped
 from services.diaryhuman import get_diary_grades_human
 from services.diarynz import get_diary_grades
@@ -252,6 +252,39 @@ async def _charge_ai(message: Message, state: FSMContext, user_id: int, is_vip: 
     return False
 
 
+_AI_ALERT_AT = 0.0
+_AI_ALERT_COOLDOWN = 3600
+
+
+async def _handle_ai_unavailable(user_id: int, is_vip: bool, error: Exception, answer_to):
+    """ШІ впав не з вини користувача: повертаємо безкоштовний запит,
+    кажемо правду замість «змініть запитання» і пінгуємо адміна."""
+    global _AI_ALERT_AT
+
+    if not is_vip:
+        db.refund_free_ai(user_id)
+
+    logger.error("AI unavailable for user_id=%s: %s", user_id, error)
+
+    now = time.time()
+    if now - _AI_ALERT_AT > _AI_ALERT_COOLDOWN:
+        _AI_ALERT_AT = now
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ <b>ШІ недоступний</b>\n<code>{escape(str(error)[:600])}</code>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            logger.exception("Failed to alert admin about AI outage")
+
+    await answer_to(
+        "🛠 ШІ тимчасово недоступний — це на нашому боці, не в твоєму запитанні.\n"
+        "Спробуй трохи пізніше." + ("" if is_vip else "\n<i>Безкоштовний запит повернуто.</i>"),
+        parse_mode="HTML"
+    )
+
+
 def _ai_cost_footer(user_id: int, is_vip: bool, cost: int) -> str:
     """VIP платить токенами, не-VIP бачить залишок безкоштовних запитів."""
     if is_vip:
@@ -296,6 +329,8 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
 
             await answer_long(message, answer, parse_mode="HTML", disable_web_page_preview=True)
 
+        except AIUnavailable as e:
+            await _handle_ai_unavailable(user_id, is_vip, e, message.reply)
         except Exception:
             logger.exception("AI text request failed for user_id=%s", user_id)
             await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
@@ -332,6 +367,8 @@ async def ai_input_text_or_photo(message: Message, state: FSMContext):
 
             await answer_long(message, answer, parse_mode="HTML", disable_web_page_preview=True)
 
+        except AIUnavailable as e:
+            await _handle_ai_unavailable(user_id, is_vip, e, message.reply)
         except Exception:
             logger.exception("AI photo request failed for user_id=%s", user_id)
             await message.reply("😫 Халепа... спробуйте трохи змінити запитання!")
@@ -392,11 +429,13 @@ async def handle_ai_homework(callback: CallbackQuery):
 
         await answer_long(callback.message, response_text, parse_mode="HTML")
 
+    except AIUnavailable as e:
+        await _handle_ai_unavailable(user_id, is_vip, e, callback.message.answer)
     except Exception:
         logger.exception("AI homework request failed for user_id=%s", user_id)
         await callback.message.answer("❌ Не вдалося отримати пораду. Спробуй пізніше.")
     # Видаляємо з кешу, щоб не забивати пам'ять
-    del HW_AI_CACHE[temp_id]
+    HW_AI_CACHE.pop(temp_id, None)
 
 
 @router.callback_query(F.data == "exit_ai")
