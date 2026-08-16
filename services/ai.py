@@ -105,6 +105,19 @@ async def ai(user_prompt: str, image_bytes: bytes | None = None) -> tuple[str, i
 
         text_response = (response.text or "").strip()
 
+        if not text_response:
+            # Порожня відповідь без винятку: спрацював фільтр безпеки або
+            # модель вичерпала max_output_tokens. Без цього логу користувач
+            # бачить «Халепа», а в журналі — тиша.
+            candidates = getattr(response, "candidates", None) or []
+            logger.warning(
+                "Gemini returned empty text: model=%s finish=%s block=%s usage=%s",
+                GEMINI_MODEL,
+                [getattr(c, "finish_reason", None) for c in candidates],
+                getattr(response, "prompt_feedback", None),
+                usage,
+            )
+
         # ВАЖЛИВО: Повертаємо кортеж (текст, витрати)
         return text_response, total_tokens
 
