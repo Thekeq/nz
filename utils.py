@@ -30,15 +30,14 @@ async def answer_long(message, text: str, reply_markup=None, **kwargs):
 async def safe_send(
         user_id: int,
         text: str,
-        disable_notify_on_block: bool = False,
         photo: str | None = None,
         **kwargs
 ) -> bool:
     """Надсилає повідомлення (або фото з підписом) з обробкою лімітів Telegram.
 
     Повертає True, якщо надіслано. При флуд-ліміті чекає і повторює один раз.
-    Якщо юзер заблокував бота і disable_notify_on_block=True — вимикає йому
-    розсилки в БД, щоб не скрапити дневник даремно.
+    Якщо юзер заблокував бота — позначає його в БД, і наступні розсилки
+    та фонові перевірки його вже пропускають.
     """
     async def deliver():
         if photo:
@@ -58,12 +57,11 @@ async def safe_send(
             logger.exception("Retry send failed for user_id=%s", user_id)
             return False
     except TelegramForbiddenError:
-        if disable_notify_on_block:
-            try:
-                db.disable_all_notify(user_id)
-                logger.info("User %s blocked the bot, notifications disabled", user_id)
-            except Exception:
-                logger.exception("Failed to disable notify for user_id=%s", user_id)
+        try:
+            db.mark_blocked(user_id)
+            logger.info("User %s blocked the bot, excluded from broadcasts", user_id)
+        except Exception:
+            logger.exception("Failed to mark user_id=%s as blocked", user_id)
         return False
     except Exception:
         logger.exception("send_message failed for user_id=%s", user_id)

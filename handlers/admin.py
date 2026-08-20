@@ -648,6 +648,7 @@ async def stats(message: Message):
         f"📅 Період: {days} днів\n\n"
         f"👥 <b>Всього юзерів:</b> {stats_data['total']}\n"
         f"├ 🔐 З даними: {stats_data['total_creds']}\n"
+        f"├ 🚫 Заблокували бота: {db.count_blocked()}\n"
         f"├ ✅ NZ Valid: {nz_verified}\n"
         f"└ ✅ Human Valid: {human_verified}\n\n"
         f"📈 <b>Ріст:</b>\n"

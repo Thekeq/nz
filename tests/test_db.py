@@ -127,3 +127,42 @@ class DigestOptInTests(unittest.TestCase):
         self.db.toggle_notify_digest(1)
         self.assertFalse(self.db.toggle_notify_digest(1))
         self.assertEqual(self.db.get_digest_recipients(), [])
+
+
+class BlockedUserTests(unittest.TestCase):
+    """Хто заблокував бота — випадає з розсилок, поки не повернеться."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+        self.db.ensure_user(1)
+        self.db.ensure_user(2)
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_blocked_user_drops_out_of_broadcasts(self):
+        self.assertEqual(len(self.db.get_all_users()), 2)
+        self.assertEqual(len(self.db.get_non_logged_users()), 2)
+
+        self.db.mark_blocked(1)
+
+        self.assertEqual([r[0] for r in self.db.get_all_users()], [2])
+        self.assertEqual([r[0] for r in self.db.get_non_logged_users()], [2])
+        self.assertEqual(self.db.count_blocked(), 1)
+
+    def test_blocking_turns_off_notifications(self):
+        self.db.toggle_notify(1)
+        self.db.toggle_notify_digest(1)
+        self.db.mark_blocked(1)
+
+        self.assertFalse(self.db.user_notify(1))
+        self.assertFalse(self.db.user_notify_digest(1))
+
+    def test_returning_user_is_unblocked(self):
+        self.db.mark_blocked(1)
+        self.db.ensure_user(1)          # написав боту знову
+
+        self.assertEqual(self.db.count_blocked(), 0)
+        self.assertEqual(len(self.db.get_all_users()), 2)

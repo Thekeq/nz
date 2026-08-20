@@ -6,13 +6,11 @@ import re
 import logging
 from html import escape
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from loader import (
-    db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
-    USER_LAST_CALL, KYIV_TZ, fernet,
+from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
+    USER_LAST_CALL, KYIV_TZ, fernet
 )
-from services.diarynz import (
-    cleanup_session_cache, get_diary_schedule, get_grade_events,
-    get_diary_homework, get_homework_events,
+from services.diarynz import (cleanup_session_cache, get_diary_schedule, get_grade_events,
+    get_diary_homework, get_homework_events
 )
 from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human
 from services.digest import has_lessons, has_conf_link, build_digest_text, is_school_time
@@ -133,14 +131,9 @@ async def _check_lessons_nz(user_id: int, login: str, enc_password: str):
 
         password = fernet.decrypt(enc_password.encode()).decode()
         async with SEMAPHORE:
-            schedule_text = await asyncio.to_thread(
-                get_diary_schedule,
+            schedule_text = await asyncio.to_thread(get_diary_schedule,
                 login,
-                password,
-                days=["сьогодні"],
-                user_id=user_id,
-                db=db,
-                fernet=fernet
+                password, days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
             )
 
         lessons_list = []
@@ -160,8 +153,7 @@ async def _check_lessons_nz(user_id: int, login: str, enc_password: str):
             f"🔔 Нагадування: через {LEAD_MIN} хвилин починається "
             f"<b>{lesson_name}</b> о <b>{target_time}</b>."
         )
-        if await safe_send(user_id, text, disable_notify_on_block=True,
-                           parse_mode="HTML", disable_web_page_preview=False):
+        if await safe_send(user_id, text, parse_mode="HTML", disable_web_page_preview=False):
             SENT_REMINDERS.add((user_id, target_key))
     except Exception:
         logger.exception("NZ lesson reminder failed for user_id=%s", user_id)
@@ -202,8 +194,7 @@ async def _check_lessons_human(user_id: int, login: str, enc_password: str):
 
         password = fernet.decrypt(enc_password.encode()).decode()
         async with SEMAPHORE:
-            schedule_text = await asyncio.to_thread(
-                get_diary_schedule_human, login, password, ["сьогодні"]
+            schedule_text = await asyncio.to_thread(get_diary_schedule_human, login, password, ["сьогодні"]
             )
 
         lessons = parse_human_schedule_text(schedule_text)
@@ -234,8 +225,7 @@ async def _check_lessons_human(user_id: int, login: str, enc_password: str):
                 f"<b>{escape(les['subject'])}</b> о <b>{escape(les['start'])}</b>\n"
                 f"{escape(link)}"
             )
-            if await safe_send(user_id, text, disable_notify_on_block=True,
-                               parse_mode="HTML", disable_web_page_preview=False):
+            if await safe_send(user_id, text, parse_mode="HTML", disable_web_page_preview=False):
                 SENT_REMINDERS.add((user_id, key))
             await asyncio.sleep(0.25)
     except Exception:
@@ -258,14 +248,10 @@ async def check_grades():
                 password = fernet.decrypt(enc_password.encode()).decode()
 
                 async with SEMAPHORE:
-                    events = await asyncio.to_thread(
-                        get_grade_events,
+                    events = await asyncio.to_thread(get_grade_events,
                         login,
                         password,
-                        20,
-                        user_id=user_id,
-                        db=db,
-                        fernet=fernet
+                        20, user_id=user_id, db=db, fernet=fernet
                     )
 
                 if not events:
@@ -293,9 +279,7 @@ async def check_grades():
 
                     # хеши фиксируем только после успешной отправки:
                     # если Telegram не принял — попробуем в следующем цикле
-                    if await safe_send(user_id, "\n\n".join(lines),
-                                       disable_notify_on_block=True,
-                                       disable_web_page_preview=True):
+                    if await safe_send(user_id, "\n\n".join(lines), disable_web_page_preview=True):
                         db.set_last_grade_hashes(user_id, [e["hash"] for e in events[:3]])
                     await asyncio.sleep(0.25)
 
@@ -352,13 +336,10 @@ async def _fetch_digest_parts(user_id: int, login: str, enc_password: str, provi
 
     async with SEMAPHORE:
         if provider == "human":
-            schedule = await asyncio.to_thread(
-                get_diary_schedule_human, login, password, ["сьогодні"]
+            schedule = await asyncio.to_thread(get_diary_schedule_human, login, password, ["сьогодні"]
             )
         else:
-            schedule = await asyncio.to_thread(
-                get_diary_schedule, login, password,
-                days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
+            schedule = await asyncio.to_thread(get_diary_schedule, login, password, days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
             )
 
     if not has_lessons(schedule):
@@ -368,13 +349,10 @@ async def _fetch_digest_parts(user_id: int, login: str, enc_password: str, provi
     try:
         async with SEMAPHORE:
             if provider == "human":
-                homework = await asyncio.to_thread(
-                    get_diary_homework_human, login, password, "today"
+                homework = await asyncio.to_thread(get_diary_homework_human, login, password, "today"
                 )
             else:
-                homework = await asyncio.to_thread(
-                    get_diary_homework, login, password,
-                    days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
+                homework = await asyncio.to_thread(get_diary_homework, login, password, days=["сьогодні"], user_id=user_id, db=db, fernet=fernet
                 )
     except Exception:
         # розклад важливіший за ДЗ — без нього дайджест все одно корисний
@@ -394,13 +372,8 @@ async def send_digest_to(user_id: int, login: str, enc_password: str, provider: 
             [InlineKeyboardButton(text="⭐️ Хочу щоранку", callback_data="vip_menu")]
         ])
 
-        return await safe_send(
-            user_id,
-            build_digest_text(schedule, homework, is_vip),
-            disable_notify_on_block=True,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=kb
+        return await safe_send(user_id,
+            build_digest_text(schedule, homework, is_vip), parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb
         )
     except Exception:
         logger.exception("Digest failed for user_id=%s", user_id)
@@ -464,10 +437,7 @@ async def check_homework():
 
                 password = fernet.decrypt(enc_password.encode()).decode()
                 async with SEMAPHORE:
-                    events = await asyncio.to_thread(
-                        get_homework_events, login, password,
-                        days=["сьогодні", "завтра"],
-                        user_id=user_id, db=db, fernet=fernet
+                    events = await asyncio.to_thread(get_homework_events, login, password, days=["сьогодні", "завтра"], user_id=user_id, db=db, fernet=fernet
                     )
 
                 if not events:
@@ -494,10 +464,7 @@ async def check_homework():
                     lines.append(f"\n<i>…і ще {len(new_events) - 5}</i> — /homework")
 
                 # хеші фіксуємо лише після успішної відправки
-                if await safe_send(user_id, "\n".join(lines),
-                                   disable_notify_on_block=True,
-                                   parse_mode="HTML",
-                                   disable_web_page_preview=True):
+                if await safe_send(user_id, "\n".join(lines), parse_mode="HTML", disable_web_page_preview=True):
                     merged = current + [h for h in known if h not in set(current)]
                     db.set_homework_hashes(user_id, merged)
                 await asyncio.sleep(0.25)
@@ -517,14 +484,11 @@ async def vip_expiry_task():
     while True:
         try:
             for user_id, expires in db.get_vips_expiring_within(24 * 3600):
-                if await safe_send(
-                    user_id,
+                if await safe_send(user_id,
                     "⏳ <b>Твій VIP закінчується завтра!</b>\n"
                     "Після цього вимкнуться ⏰ нагадування перед уроками "
                     "і 🔔 сповіщення про оцінки.\n\n"
-                    "Продовжити: /vip",
-                    disable_notify_on_block=True,
-                    parse_mode="HTML"
+                    "Продовжити: /vip", parse_mode="HTML"
                 ):
                     db.set_expiry_stage(user_id, 1)
                 await asyncio.sleep(0.25)
@@ -533,13 +497,9 @@ async def vip_expiry_task():
                 [InlineKeyboardButton(text="🔥 Місяць за 50 ⭐️ (-33%)", callback_data="buy_winback")]
             ])
             for user_id, expires in db.get_vips_just_expired(WINBACK_GRACE_SEC):
-                if await safe_send(
-                    user_id,
+                if await safe_send(user_id,
                     "😔 <b>VIP закінчився</b> — нагадування і сповіщення вимкнено.\n\n"
-                    "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>",
-                    disable_notify_on_block=True,
-                    parse_mode="HTML",
-                    reply_markup=winback_kb
+                    "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>", parse_mode="HTML", reply_markup=winback_kb
                 ):
                     db.set_expiry_stage(user_id, 2)
                     db.record_command_metric("funnel:winback_sent", 0)

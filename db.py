@@ -102,6 +102,12 @@ class DataBase:
             except Exception:
                 pass
 
+            # хто заблокував бота — виключаємо з розсилок
+            try:
+                self.connection.execute("ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+
             try:
                 self.connection.execute("ALTER TABLE creds ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;")
                 self.connection.execute("ALTER TABLE creds ADD COLUMN verified_at INTEGER;")
@@ -270,11 +276,14 @@ class DataBase:
 
     # ===== Maintenance =====
 
-    def disable_all_notify(self, user_id: int):
-        """Вимикає всі розсилки (юзер заблокував бота — нема сенсу скрапити для нього)."""
+    def mark_blocked(self, user_id: int):
+        """Юзер заблокував бота: більше не шлемо йому нічого і не скрапимо для нього.
+        Знімається автоматично в ensure_user, коли він повернеться."""
         with self.connection:
+            self.connection.execute("UPDATE users SET blocked=1 WHERE user_id=?", (user_id,))
             self.connection.execute(
-                "UPDATE subs SET notify=0, notify_grades=0 WHERE user_id=?",
+                "UPDATE subs SET notify=0, notify_grades=0, notify_homework=0, notify_digest=0 "
+                "WHERE user_id=?",
                 (user_id,)
             )
 
@@ -528,6 +537,10 @@ class DataBase:
         with self.connection:
             self.connection.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
             self.connection.execute("INSERT OR IGNORE INTO subs(user_id) VALUES (?)", (user_id,))
+            # юзер щось написав боту — отже, розблокував
+            self.connection.execute(
+                "UPDATE users SET blocked=0 WHERE user_id=? AND blocked=1", (user_id,)
+            )
 
     # ===== Credentials (login/password) =====
 
@@ -1036,7 +1049,9 @@ class DataBase:
 
     def get_all_users(self):
         with self.connection:
-            return self.connection.execute("SELECT user_id FROM users").fetchall()
+            return self.connection.execute(
+                "SELECT user_id FROM users WHERE blocked=0"
+            ).fetchall()
 
     def get_non_logged_users(self):
         """
@@ -1048,8 +1063,14 @@ class DataBase:
                 SELECT u.user_id
                 FROM users u
                 LEFT JOIN creds c ON u.user_id = c.user_id
-                WHERE c.user_id IS NULL
+                WHERE c.user_id IS NULL AND u.blocked=0
             """).fetchall()
+
+    def count_blocked(self) -> int:
+        with self.connection:
+            return self.connection.execute(
+                "SELECT COUNT(*) FROM users WHERE blocked=1"
+            ).fetchone()[0]
 
     # ===== Activity (commands per day/week) =====
 
