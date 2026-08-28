@@ -184,3 +184,14 @@ class ChannelBonusTests(unittest.TestCase):
     def test_bonus_is_per_user(self):
         self.assertTrue(self.db.try_use_channel_bonus(1))
         self.assertTrue(self.db.try_use_channel_bonus(2))
+
+    # Сусідній проєкт віддає весь свій список при кожному опитуванні —
+    # захист від подвійної видачі тут єдиний, і він у вставці.
+    def test_partner_grant_is_one_shot(self):
+        self.assertTrue(self.db.claim_partner_grant(1, "nz"))
+        self.assertFalse(self.db.claim_partner_grant(1, "nz"))
+
+    def test_partner_grant_is_per_user_and_source(self):
+        self.assertTrue(self.db.claim_partner_grant(1, "nz"))
+        self.assertTrue(self.db.claim_partner_grant(2, "nz"))
+        self.assertTrue(self.db.claim_partner_grant(1, "other"))

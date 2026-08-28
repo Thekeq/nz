@@ -225,6 +225,32 @@ class DataBase:
                 )
             """)
 
+            # Нагороди за партнерські проєкти (Cookie Merge). PRIMARY KEY на
+            # (user_id, source) — це і є захист від подвійної видачі: сусідній
+            # проєкт віддає ВЕСЬ список своїх реєстрацій при кожному опитуванні,
+            # і саме вставка вирішує, кому платити. Тому опитування можна
+            # повторювати скільки завгодно, а впала задача посеред видачі —
+            # наступний прохід просто доплатить решту.
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS partner_grants (
+                  user_id    INTEGER NOT NULL,
+                  source     TEXT NOT NULL,
+                  granted_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                  PRIMARY KEY(user_id, source)
+                )
+            """)
+
+    # ===== Партнерські нагороди =====
+
+    def claim_partner_grant(self, user_id: int, source: str) -> bool:
+        """True рівно один раз на пару (user_id, source) — тоді й платимо."""
+        with self.connection:
+            cur = self.connection.execute(
+                "INSERT OR IGNORE INTO partner_grants(user_id, source) VALUES (?, ?)",
+                (user_id, source)
+            )
+            return cur.rowcount > 0
+
     # ===== FSM storage (aiogram) =====
 
     def fsm_set_state(self, key: str, state: str | None):

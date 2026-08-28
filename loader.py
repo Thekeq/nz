@@ -25,6 +25,16 @@ if not KEY:
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "1076078800"))
 
+# Cookie Merge на цій же машині: хто перейшов у гру за нашим посиланням
+# (?startapp=src_nz) і зареєструвався там, отримує тиждень VIP тут.
+# Порожній PARTNER_TOKEN — обмін вимкнено (так і на дев-машині, де сусіднього
+# проєкту немає). Адреса локальна: гра слухає 127.0.0.1:8000, назовні її
+# порт не виходить, тому токен не їздить по мережі.
+COOKIE_API_URL = os.getenv("COOKIE_API_URL", "http://127.0.0.1:8000").rstrip("/")
+COOKIE_API_TOKEN = os.getenv("PARTNER_TOKEN", "")
+COOKIE_SOURCE = os.getenv("COOKIE_SOURCE", "nz")
+COOKIE_VIP_DAYS = int(os.getenv("COOKIE_VIP_DAYS", "7"))
+
 # Ініціалізація
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 db = DataBase(DB_FILE)

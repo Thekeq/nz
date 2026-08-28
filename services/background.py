@@ -5,9 +5,11 @@ import time
 import re
 import logging
 from html import escape
+import requests
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
-    USER_LAST_CALL, KYIV_TZ, fernet
+    USER_LAST_CALL, KYIV_TZ, fernet,
+    COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS
 )
 from services.diarynz import (cleanup_session_cache, get_diary_schedule, get_grade_events,
     get_diary_homework, get_homework_events
@@ -508,6 +510,57 @@ async def vip_expiry_task():
             logger.exception("VIP expiry check failed")
 
         await asyncio.sleep(3600)
+
+
+COOKIE_POLL_SEC = 10 * 60
+
+
+def _cookie_source_users() -> list[int]:
+    """Хто зареєструвався у Cookie Merge за нашим посиланням. Синхронно —
+    викликається через to_thread, як і решта мережевих походів тут."""
+    resp = requests.get(
+        f"{COOKIE_API_URL}/internal/source/{COOKIE_SOURCE}",
+        headers={"Authorization": f"Bearer {COOKIE_API_TOKEN}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return [int(u) for u in resp.json().get("users", [])]
+
+
+async def partner_vip_task():
+    """Тиждень VIP тим, хто пішов у Cookie Merge за нашим посиланням.
+
+    Гра віддає ВЕСЬ список своїх реєстрацій із міткою src_nz, а хто вже
+    отримав нагороду — пам'ятаємо ми: платить рівно вставка в partner_grants.
+    Тому опитування безпечно повторювати, а задача, що впала посеред видачі,
+    доплатить решту наступним проходом.
+
+    VIP видаємо навіть тому, кого бот ще не бачив: set_vip заводить рядок
+    сам, і якщо людина натисне /start пізніше — підписка вже чекає. Тому
+    невдала відправка повідомлення нагороду не скасовує."""
+    if not COOKIE_API_TOKEN:
+        logger.info("Cookie partner sync off: PARTNER_TOKEN not set")
+        return
+    while True:
+        try:
+            for user_id in await asyncio.to_thread(_cookie_source_users):
+                if not db.claim_partner_grant(user_id, COOKIE_SOURCE):
+                    continue
+                db.set_vip(user_id, days=COOKIE_VIP_DAYS, source="partner")
+                db.record_command_metric("partner:cookie_vip", 0)
+                await safe_send(user_id,
+                    f"🎁 <b>{COOKIE_VIP_DAYS} днів VIP — за Cookie Merge!</b>\n\n"
+                    "Ти зайшов у гру за нашим посиланням, і VIP уже активний:\n"
+                    "⏰ нагадування перед уроками\n"
+                    "🔔 сповіщення про оцінки\n"
+                    "📬 ранковий дайджест\n\n"
+                    "Термін і статус: /vip", parse_mode="HTML"
+                )
+                await asyncio.sleep(0.25)
+        except Exception:
+            logger.exception("Cookie partner sync failed")
+
+        await asyncio.sleep(COOKIE_POLL_SEC)
 
 
 async def daily_backup_task():
