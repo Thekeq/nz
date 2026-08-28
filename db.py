@@ -242,6 +242,15 @@ class DataBase:
 
     # ===== Партнерські нагороди =====
 
+    def has_partner_grant(self, user_id: int, source: str) -> bool:
+        """Чи вже отримав цю нагороду. Тільки для показу кнопки: рішення про
+        виплату приймає claim_partner_grant, і воно атомарне."""
+        with self.connection:
+            return self.connection.execute(
+                "SELECT 1 FROM partner_grants WHERE user_id=? AND source=?",
+                (user_id, source)
+            ).fetchone() is not None
+
     def claim_partner_grant(self, user_id: int, source: str) -> bool:
         """True рівно один раз на пару (user_id, source) — тоді й платимо."""
         with self.connection:

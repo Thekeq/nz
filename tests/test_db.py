@@ -191,6 +191,13 @@ class ChannelBonusTests(unittest.TestCase):
         self.assertTrue(self.db.claim_partner_grant(1, "nz"))
         self.assertFalse(self.db.claim_partner_grant(1, "nz"))
 
+    # Кнопка «тиждень VIP за гру» ховається саме по цьому прапорцю
+    def test_partner_grant_flag_follows_the_claim(self):
+        self.assertFalse(self.db.has_partner_grant(1, "nz"))
+        self.db.claim_partner_grant(1, "nz")
+        self.assertTrue(self.db.has_partner_grant(1, "nz"))
+        self.assertFalse(self.db.has_partner_grant(1, "other"))
+
     def test_partner_grant_is_per_user_and_source(self):
         self.assertTrue(self.db.claim_partner_grant(1, "nz"))
         self.assertTrue(self.db.claim_partner_grant(2, "nz"))

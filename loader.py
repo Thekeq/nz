@@ -34,6 +34,10 @@ COOKIE_API_URL = os.getenv("COOKIE_API_URL", "http://127.0.0.1:8000").rstrip("/"
 COOKIE_API_TOKEN = os.getenv("PARTNER_TOKEN", "")
 COOKIE_SOURCE = os.getenv("COOKIE_SOURCE", "nz")
 COOKIE_VIP_DAYS = int(os.getenv("COOKIE_VIP_DAYS", "7"))
+# Посилання з міткою джерела. Без ?startapp=src_<code> перехід не рахується
+# зовсім: гра пише мітку рівно один раз, у момент реєстрації.
+COOKIE_LINK = os.getenv(
+    "COOKIE_LINK", f"https://t.me/CookieMerge_bot?startapp=src_{COOKIE_SOURCE}")
 
 # Ініціалізація
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

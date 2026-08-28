@@ -16,7 +16,8 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import texts
-from loader import db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME
+from loader import (db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME,
+    COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS)
 from utils import track_activity, fix_ai_response, user_can_call, compact_num, answer_long
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
@@ -106,6 +107,10 @@ async def vip_func(event: Union[Message, CallbackQuery]):
     now_ts = int(time.time())
     is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
     progress_text = f"{invites_left}/1 до наступних 3 днів VIP"
+    # Обмін увімкнено тільки коли є токен: без нього нагороду ніхто не видасть,
+    # і кнопка вела б у гру з обіцянкою, яку нема кому виконати
+    cookie_claimed = (not COOKIE_API_TOKEN
+                      or db.has_partner_grant(user_id, COOKIE_SOURCE))
 
     if is_vip:
         date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y")
@@ -127,12 +132,18 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"Прогрес: <b>{progress_text}</b>\n"
             f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання:\n"
-            f"https://t.me/{BOT_USERNAME}?start={user_id}</blockquote>", reply_markup=share_kb(user_id),
+            f"https://t.me/{BOT_USERNAME}?start={user_id}</blockquote>",
+            reply_markup=share_kb(user_id, cookie_claimed),
             parse_mode="HTML", disable_web_page_preview=True
         )
     else:
         db.record_command_metric("funnel:vip_menu", 0)
+        cookie_line = "" if cookie_claimed else (
+            f"🍪 <b>{COOKIE_VIP_DAYS} днів VIP безкоштовно</b> — просто зайди "
+            "в гру Cookie Merge за кнопкою внизу. Нагорода прилетить сюди "
+            "автоматично, платити нічого не треба.\n\n")
         await message_object.answer(
+            f"{cookie_line}"
             "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP (до 9 днів на місяць)\n"
             f"Прогрес: <b>{progress_text}</b>\n"
             f"Всього запрошено: <b>{total_invites}</b>\n"
@@ -153,7 +164,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n"
             f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
             f"👉 <code>{user_id}</code> 👈 <i>(натисніть щоб скопіювати)</i></blockquote>",
-            reply_markup=vip_plans_kb(user_id),
+            reply_markup=vip_plans_kb(user_id, cookie_claimed),
             disable_web_page_preview=True
         )
 
