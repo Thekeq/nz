@@ -133,6 +133,8 @@ def vip_plans_kb(user_id: int):
             [InlineKeyboardButton(text="🔥 1 місяць — 75 ⭐️ (популярний)", callback_data="buy:month")],
             [InlineKeyboardButton(text="💎 3 місяці — 200 ⭐️ (вигідніше)", callback_data="buy:months3")],
             [InlineKeyboardButton(text="🎁 Безкоштовно: запросити друга", url=_share_url(user_id, description))],
+            [InlineKeyboardButton(text="📣 +3 дні за підписку на канал", url="https://t.me/nzdiaryua")],
+            [InlineKeyboardButton(text="✅ Я підписався", callback_data="check_sub")],
         ]
     )
 

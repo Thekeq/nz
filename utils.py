@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import time
 import re
 import logging
@@ -110,6 +111,20 @@ def fix_ai_response(text: str) -> str:
 REF_REWARD_DAYS = 3
 REF_MONTHLY_CAP = 3  # максимум нагород на 30 днів (= 9 днів VIP)
 
+# Акція до 1 вересня: перший запрошений друг дає 5 днів замість 3.
+# Одноразово на юзера — далі звичайні 3 дні.
+PROMO_UNTIL = datetime.date(2026, 9, 1)
+PROMO_REWARD_DAYS = 5
+
+
+def _reward_days(referrer_id: int) -> tuple[int, bool]:
+    """(скільки днів дати, чи це акційна нагорода)."""
+    if datetime.date.today() >= PROMO_UNTIL:
+        return REF_REWARD_DAYS, False
+    # акція діє лише на першу нагороду в житті юзера
+    first_ever = db.count_recent_ref_grants(referrer_id, days=36500) == 0
+    return (PROMO_REWARD_DAYS, True) if first_ever else (REF_REWARD_DAYS, False)
+
 
 async def process_referral_reward(user_id: int):
     if not db.try_mark_ref_rewarded(user_id):
@@ -143,15 +158,19 @@ async def process_referral_reward(user_id: int):
     if not db.try_consume_invites(referrer_id, need_invite):
         return
 
+    days, is_promo = _reward_days(referrer_id)
+
     # Реферальний VIP — «лайт»: нагадування, сповіщення про оцінки,
     # розклад по днях. ШІ-токени та ексклюзивні теми — лише у платному.
-    db.set_vip(referrer_id, REF_REWARD_DAYS, source="ref")
+    db.set_vip(referrer_id, days, source="ref")
     db.add_ref_grant(referrer_id)
 
     await safe_send(
         referrer_id,
         f"🎉 <b>Вітаємо! Твій друг приєднався!</b>\n\n"
-        f"⭐️ VIP продовжено на <b>{REF_REWARD_DAYS} дні(в)</b>\n"
+        + (f"🔥 <b>Акція до 1 вересня:</b> перший друг = <b>{days} днів</b> VIP!\n"
+           if is_promo else "")
+        + f"⭐️ VIP продовжено на <b>{days} дні(в)</b>\n"
         f"⏰ Нагадування, 🔔 сповіщення про оцінки та 📅 розклад по днях — твої!\n"
         f"✨ ШІ-асистент без лімітів і 🎨 ексклюзивні теми — у платному /vip",
         parse_mode="HTML"

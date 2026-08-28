@@ -166,3 +166,21 @@ class BlockedUserTests(unittest.TestCase):
 
         self.assertEqual(self.db.count_blocked(), 0)
         self.assertEqual(len(self.db.get_all_users()), 2)
+
+
+class ChannelBonusTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_channel_bonus_is_one_shot(self):
+        self.assertTrue(self.db.try_use_channel_bonus(1))
+        self.assertFalse(self.db.try_use_channel_bonus(1))
+
+    def test_bonus_is_per_user(self):
+        self.assertTrue(self.db.try_use_channel_bonus(1))
+        self.assertTrue(self.db.try_use_channel_bonus(2))

@@ -200,6 +200,7 @@ class DataBase:
                 "ALTER TABLE subs ADD COLUMN notify_homework INTEGER NOT NULL DEFAULT 0",
                 # дайджест — opt-in: за замовчуванням вимкнений, щоб не спамити
                 "ALTER TABLE subs ADD COLUMN notify_digest INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE subs ADD COLUMN channel_bonus_used INTEGER NOT NULL DEFAULT 0",
             ):
                 try:
                     self.connection.execute(ddl)
@@ -686,6 +687,16 @@ class DataBase:
                 (user_id,)
             ).fetchone()
             return row[0] if row else "paid"
+
+    def try_use_channel_bonus(self, user_id: int) -> bool:
+        """True тільки один раз — бонус за підписку на канал видається раз."""
+        self.ensure_user(user_id)
+        with self.connection:
+            cur = self.connection.execute(
+                "UPDATE subs SET channel_bonus_used=1 WHERE user_id=? AND channel_bonus_used=0",
+                (user_id,)
+            )
+            return cur.rowcount == 1
 
     def try_use_trial(self, user_id: int) -> bool:
         """True тільки один раз — коли юзер ще не використовував пробний VIP."""

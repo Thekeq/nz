@@ -40,6 +40,45 @@ WINBACK_PLAN = {"days": 30, "stars": 50, "tokens": 1_000_000, "title": "VIP на
 WINBACK_GRACE_SEC = 48 * 3600
 
 
+CHANNEL_ID = "@nzdiaryua"
+CHANNEL_URL = "https://t.me/nzdiaryua"
+CHANNEL_BONUS_DAYS = 3
+
+
+@router.callback_query(F.data == "check_sub")
+async def check_channel_sub(callback: CallbackQuery):
+    user_id = callback.from_user.id
+
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+    except Exception:
+        # бот не адмін у каналі або канал недоступний — це наша проблема
+        logger.exception("get_chat_member failed for %s in %s", user_id, CHANNEL_ID)
+        await callback.answer("⚠️ Не вдалося перевірити підписку. Спробуй пізніше.", show_alert=True)
+        return
+
+    if member.status not in ("member", "administrator", "creator"):
+        await callback.answer("❌ Підписки не видно. Підпишись і натисни ще раз.", show_alert=True)
+        return
+
+    if not db.try_use_channel_bonus(user_id):
+        await callback.answer("Бонус за підписку вже отримано 🙂", show_alert=True)
+        return
+
+    db.set_vip(user_id, days=CHANNEL_BONUS_DAYS, source="ref")
+    db.record_command_metric("funnel:channel_bonus", 0)
+
+    await callback.answer()
+    await callback.message.answer(
+        f"🎁 <b>+{CHANNEL_BONUS_DAYS} дні VIP за підписку!</b>\n\n"
+        "⏰ /notify — нагадування перед уроками\n"
+        "🌅 /notify_digest — ранковий дайджест\n"
+        "🔔 /notify_grades — сповіщення про оцінки",
+        parse_mode="HTML",
+        reply_markup=build_vip_kb()
+    )
+
+
 def _is_vip(user_id: int) -> bool:
     vip_flag, expires = db.get_vip_status(user_id)
     return bool(vip_flag) and (expires == 0 or expires > int(time.time()))
