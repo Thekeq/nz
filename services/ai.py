@@ -45,10 +45,35 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # на першому ж чистому встановленні.
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
+# Google відмовляє за геолокацією вихідного IP: з нашого дата-центру
+# generateContent повертає 400 FAILED_PRECONDITION «User location is not
+# supported», хоча той самий ключ працює з домашнього комп'ютера. Тому запити
+# ходять через власний проксі на Cloudflare — назовні вони йдуть з адрес
+# Cloudflare, які Google не ріже. Порожній GEMINI_BASE_URL — ходимо напряму.
+#
+# Секрет — не про ключ (він у проксі не зберігається), а про квоту: воркер
+# стоїть у відкритому інтернеті, і без заголовка будь-хто, хто знайде адресу,
+# витратить наш безкоштовний ліміт запитів.
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "").rstrip("/")
+GEMINI_PROXY_SECRET = os.getenv("GEMINI_PROXY_SECRET", "")
+
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY is not set; AI requests will fail until it is configured")
 
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+def http_options() -> types.HttpOptions | None:
+    """Куди і з чим ходити. Спільне для бота і для deploy/check_ai.py —
+    діагностика, що перевіряє не той шлях, гірша за її відсутність."""
+    if not GEMINI_BASE_URL:
+        return None
+    return types.HttpOptions(
+        base_url=GEMINI_BASE_URL,
+        headers={"x-proxy-secret": GEMINI_PROXY_SECRET} if GEMINI_PROXY_SECRET else None,
+    )
+
+
+client = (genai.Client(api_key=GEMINI_API_KEY, http_options=http_options())
+          if GEMINI_API_KEY else None)
 
 
 def compress_image(image_bytes: bytes) -> bytes:
