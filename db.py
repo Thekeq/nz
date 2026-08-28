@@ -714,6 +714,15 @@ class DataBase:
             vip, expires = int(row[0] or 0), int(row[1] or 0)
             return bool(vip), expires
 
+    def remove_vip(self, user_id: int):
+        """Знімає VIP. expiry_stage=0, щоб при наступній видачі знову
+        спрацювала воронка нагадувань про закінчення."""
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET vip=0, expires=0, expiry_stage=0 WHERE user_id=?",
+                (user_id,)
+            )
+
     def get_vip_source(self, user_id: int) -> str:
         """'paid' — куплений/тріал/адмінський, 'ref' — за запрошення друзів."""
         with self.connection:

@@ -41,6 +41,7 @@ async def admin_help(message: Message):
         "<b>🎁 Управління юзерами:</b>\n"
         "• <code>/gift_vip user_id days</code> — Видати VIP.\n"
         "<i>Приклад: /gift_vip 1076078800 30 (0 = назавжди)</i>\n"
+        "• <code>/del_vip user_id</code> — Зняти VIP (юзеру не повідомляємо).\n"
         "• <code>/gift_tokens user_id amount</code> — Нарахувати ШІ-токени.\n"
         "<i>Приклад: /gift_tokens 1076078800 1000</i>\n\n"
 
@@ -115,6 +116,33 @@ async def gift_vip(message: Message):
         )
     except Exception:
         await message.answer("⚠️ Юзеру видано, але повідомлення не надіслано (можливо, бот заблокований).")
+
+
+@router.message(Command("del_vip"))
+async def del_vip(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].lstrip("-").isdigit():
+        await message.answer("Формат: <code>/del_vip user_id</code>", parse_mode="HTML")
+        return
+
+    reply_id = int(parts[1])
+    vip, expires = db.get_vip_status(reply_id)
+    if not vip:
+        await message.answer(f"ℹ️ У <code>{reply_id}</code> і так немає VIP.", parse_mode="HTML")
+        return
+
+    had = "назавжди" if expires == 0 else datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
+    db.remove_vip(reply_id)
+
+    # юзера не повідомляємо: команда для відкату помилок і зловживань,
+    # за потреби напиши йому через /msg
+    await message.answer(
+        f"🚫 VIP знято з <code>{reply_id}</code> (було до: {had}).",
+        parse_mode="HTML"
+    )
 
 
 @router.message(Command("gift_tokens"))
