@@ -202,8 +202,18 @@ async def news_command(message: Message, state: FSMContext):
         await message.answer("❌ Не вдалося отримати новини. Спробуйте пізніше.", reply_markup=kb_retry)
 
 
+def _no_grades_note(text: str) -> str:
+    """Пояснення замість порожньої діаграми: канікули, новий семестр
+    або вчителі ще нічого не виставили."""
+    if parse_grades_text(text):
+        return ""
+    return "📭 <b>Оцінок поки немає</b> — нема чого рахувати й малювати.\n\n"
+
+
 def photo_grades(text):
     items = parse_grades_text(text)  # Твоя функция: [(Subject, Avg, Count), ...]
+    if not items:
+        return None  # нема з чого малювати павутинку — вийде порожня картинка
 
     # Фильтруем топ-5 предметов для красоты (или берем все, если влезет)
     # Берем только название и средний балл
@@ -301,9 +311,11 @@ async def get_grades(message: Message, state: FSMContext):
         if is_vip:
             extra = build_vip_grade_summary_human(text) if provider == "human" else build_vip_grade_summary(text)
             final_text = f"{text}\n\n{extra}" if extra else text
+            final_text = _no_grades_note(text) + final_text
 
-            if provider == "nz":
-                url = photo_grades(text)
+            url = photo_grades(text) if provider == "nz" else None
+
+            if url:
                 # ліміт підпису до фото — 1024, а не 4096: у кого багато
                 # предметів, підпис не влазить, тому текст іде окремо
                 if len(final_text) <= CAPTION_LIMIT:
@@ -321,7 +333,8 @@ async def get_grades(message: Message, state: FSMContext):
                 await answer_long(message, final_text, reply_markup=result_actions_kb(user_id), parse_mode="HTML")
 
         else:
-            await answer_long(message, text, reply_markup=result_actions_kb(user_id))
+            await answer_long(message, _no_grades_note(text) + text,
+                              reply_markup=result_actions_kb(user_id), parse_mode="HTML")
 
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)
