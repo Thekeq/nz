@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 key = os.getenv("GEMINI_API_KEY") or ""
-model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 print(f"GEMINI_API_KEY: {'є' if key else 'НЕМАЄ'} (довжина {len(key)})")
 print(f"GEMINI_MODEL:   {model}")

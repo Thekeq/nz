@@ -56,11 +56,24 @@ class PolicyLengthTests(unittest.TestCase):
         import ast
         import pathlib
 
+        def static_text(node):
+            """Текст константи, навіть коли це f-рядок.
+
+            Підставлені значення замінюємо зразком, а не порожнечею: тест
+            міряє довжину того, що побачить користувач, і назва моделі в
+            політиці — частина цієї довжини."""
+            if isinstance(node, ast.JoinedStr):
+                return "".join(
+                    part.value if isinstance(part, ast.Constant) else "x" * 40
+                    for part in node.values
+                )
+            return ast.literal_eval(node)
+
         source = pathlib.Path("handlers/common.py").read_text(encoding="utf-8")
         policy = None
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "policy_text":
-                policy = ast.literal_eval(node.value)
+                policy = static_text(node.value)
                 break
 
         self.assertIsNotNone(policy, "policy_text не знайдено")

@@ -10,6 +10,7 @@ from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
 from states import SupportStates, AuthStates  # Якщо треба
 from utils import track_activity, user_can_call, safe_send, answer_long
+from services.ai import GEMINI_MODEL
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -181,7 +182,10 @@ async def policy(message: Message):
         "<b>6. Передача даних третім сервісам</b>\n"
         "Для окремих функцій частина даних передається зовнішнім сервісам:\n"
         "• <b>NZ.ua / Human.ua</b> — ваш логін і пароль, щоб отримати ваші ж дані\n"
-        "• <b>Google Gemini</b> (модель <code>gemini-2.5-flash-lite</code>) — текст або фото, "
+        # назва моделі береться з конфігу: політика називає конкретний сервіс,
+        # і назва, що розійшлася з тим, куди справді їдуть дані, — це вже не
+        # застарілий текст, а неправдива заява користувачу
+        f"• <b>Google Gemini</b> (модель <code>{GEMINI_MODEL}</code>) — текст або фото, "
         "які ви надсилаєте в /ai, а також текст ДЗ, якщо ви натискаєте «Порада від ШІ»\n"
         "• <b>QuickChart.io</b> — назви предметів і середні бали, щоб намалювати "
         "діаграму у /avg_grades (без вашого імені та ID)\n"

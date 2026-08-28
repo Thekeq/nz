@@ -39,7 +39,11 @@ class AIUnavailable(Exception):
 
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+# Дефолт мусить бути живою моделлю: gemini-2.5-flash-lite Google уже не видає
+# новим користувачам і відповідає 404 із порадою перейти на 3.5. Прод це не
+# зачепило лише тому, що там GEMINI_MODEL заданий явно, — тобто поломка чекала
+# на першому ж чистому встановленні.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY is not set; AI requests will fail until it is configured")
