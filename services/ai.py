@@ -134,14 +134,14 @@ async def ai(user_prompt: str, image_bytes: bytes | None = None) -> tuple[str, i
     except Exception as e:
         logger.exception("Gemini request failed: %s", e)
 
-        # 429 (вичерпані кредити / rate limit), 401/403 (ключ), 5xx — це наші
-        # проблеми, а не «поганий запит». Кажемо про це чесно й повертаємо
-        # користувачу безкоштовний запит.
-        status = getattr(e, "code", None) or getattr(e, "status_code", None)
-        if status in (401, 403, 429, 500, 502, 503, 504):
-            raise AIUnavailable(str(e)) from e
-        if any(marker in str(e).upper() for marker in
-               ("RESOURCE_EXHAUSTED", "UNAUTHENTICATED", "PERMISSION_DENIED", "UNAVAILABLE")):
-            raise AIUnavailable(str(e)) from e
-
-        return "", 0
+        # Будь-який виняток тут — наша проблема, а не «погане запитання».
+        # Випадок, коли користувач справді спитав так, що модель не змогла
+        # відповісти, виглядає інакше: успішна відповідь із порожнім текстом,
+        # і її розбирає гілка вище.
+        #
+        # Раніше тут стояв перелік статусів (401/403/429/5xx). Він пропустив
+        # 400 FAILED_PRECONDITION «User location is not supported»: бот казав
+        # «спробуйте змінити запитання» на відмову Google за геолокацією,
+        # спалював безкоштовні запити і жодного разу не розбудив адміна.
+        # Перелічувати відомі поломки — готуватись до тієї, що вже сталась.
+        raise AIUnavailable(str(e)) from e
