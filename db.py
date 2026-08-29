@@ -1121,6 +1121,13 @@ class DataBase:
                 WHERE c.user_id IS NULL AND u.blocked=0
             """).fetchall()
 
+    def is_blocked(self, user_id: int) -> bool:
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT blocked FROM users WHERE user_id=?", (user_id,)
+            ).fetchone()
+            return bool(int(row[0] or 0)) if row else False
+
     def count_blocked(self) -> int:
         with self.connection:
             return self.connection.execute(

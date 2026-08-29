@@ -481,6 +481,13 @@ async def who_cmd(message: Message):
     except Exception:
         vip_line = "невідомо"
 
+    try:
+        # прапорець ставить safe_send, коли Telegram віддає Forbidden,
+        # і знімає ensure_user, щойно юзер знову щось напише боту
+        blocked_line = "🚫 так, у розсилки не потрапляє" if db.is_blocked(int(who_id)) else "✅ ні"
+    except Exception:
+        blocked_line = "невідомо"
+
     # 4. Формуємо повідомлення для адміна з посиланням на профіль
     text = (
         f"🎉 <b>Інформація про {who_id}!</b>\n\n"
@@ -488,6 +495,7 @@ async def who_cmd(message: Message):
         f"🆔 <b>ID:</b> <code>{who_id}</code>\n"
         f"🔗 <b>Username:</b> {username}\n"
         f"🎟 <b>Vip:</b> {vip_line}\n"
+        f"🚷 <b>Заблокував бота:</b> {blocked_line}\n"
         f"👉 <a href='tg://user?id={who_id}'>ВІДКРИТИ ПРОФІЛЬ ТА ПОДАРУВАТИ</a>\n\n"
     )
 
