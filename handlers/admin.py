@@ -14,7 +14,8 @@ from aiogram.types import Message, InputMediaPhoto, InlineKeyboardMarkup, Inline
 
 from handlers.vip import leaderboard_cmd
 from loader import db, bot, ADMIN_ID
-from keyboards import build_vip_kb, build_main_kb
+from keyboards import build_vip_kb, build_main_kb, broadcast_confirmation_kb
+from states import BroadcastStates
 from utils import safe_send
 from services.finder import getsession, getinfo
 
@@ -46,7 +47,7 @@ async def admin_help(message: Message):
         "<i>Приклад: /gift_tokens 1076078800 1000</i>\n\n"
 
         "<b>📢 Маркетинг:</b>\n"
-        "• <code>/bc ТЕКСТ</code> — Розсилка по всій базі.\n"
+        "• <code>/bc ТЕКСТ</code> — Розсилка по всій базі з попереднім переглядом.\n"
         "<i>Приклад: /bc Всім привіт! Оцінки оновились.</i>\n"
         "• <code>/bc_guest ТЕКСТ</code> — Розсилка по ан-логін базі.\n"
         "<i>Приклад: /bc_guest Всім привіт! Увійди в аккаунт.</i>\n"
@@ -263,7 +264,7 @@ async def test_digest(message: Message):
 
 
 @router.message(Command("bc"))
-async def broadcast(message: Message):
+async def broadcast(message: Message, state: FSMContext):
     user_id = message.from_user.id
     if user_id != ADMIN_ID:
         return
@@ -281,11 +282,49 @@ async def broadcast(message: Message):
         return
 
     text_to_send = args[1]  # Текст, який полетить юзерам (без /bc)
+    if not text_to_send.strip():
+        await message.answer("⚠️ Текст розсилки не може бути порожнім.")
+        return
 
     # Визначаємо, чи є фото
     photo_id = message.photo[-1].file_id if message.photo else None
 
-    await message.answer(f"🚀 <b>Розсилка почалась...</b>\nТип: {'Фото 📸' if photo_id else 'Текст 📝'}")
+    await state.set_state(BroadcastStates.waiting_confirmation)
+    await state.update_data(
+        broadcast_text=text_to_send,
+        broadcast_photo_id=photo_id,
+    )
+
+    await message.answer(
+        "📋 <b>Попередній перегляд розсилки</b>\n"
+        f"Тип: {'Фото 📸' if photo_id else 'Текст 📝'}\n\n"
+        "Перевір повідомлення нижче та підтвердь відправку:",
+        parse_mode="HTML",
+    )
+
+    if photo_id:
+        preview = await message.answer_photo(
+            photo_id,
+            caption=text_to_send,
+            parse_mode="HTML",
+            reply_markup=broadcast_confirmation_kb(),
+        )
+    else:
+        preview = await message.answer(
+            text_to_send,
+            parse_mode="HTML",
+            reply_markup=broadcast_confirmation_kb(),
+        )
+
+    # Старые кнопки не должны подтвердить уже новую рассылку.
+    await state.update_data(preview_message_id=preview.message_id)
+
+
+async def _run_broadcast(report_message: Message, text_to_send: str, photo_id: str | None):
+    await report_message.answer(
+        f"🚀 <b>Розсилка почалась...</b>\nТип: {'Фото 📸' if photo_id else 'Текст 📝'}",
+        parse_mode="HTML",
+    )
 
     users = db.get_all_users()
     count, failed = 0, 0
@@ -307,7 +346,46 @@ async def broadcast(message: Message):
             failed += 1
         await asyncio.sleep(0.05)  # Швидка пауза
 
-    await message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
+    await report_message.answer(f"✅ Розсилка завершена!\n📨 Успішно: {count}\n❌ Не вдалося: {failed}")
+
+
+@router.callback_query(F.data == "bc_confirm")
+async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    data = await state.get_data()
+    if data.get("preview_message_id") != callback.message.message_id:
+        await callback.answer("⚠️ Цей попередній перегляд уже неактуальний.", show_alert=True)
+        return
+
+    text_to_send = data.get("broadcast_text")
+    if not text_to_send:
+        await callback.answer("⚠️ Попередній перегляд уже неактуальний.", show_alert=True)
+        await state.clear()
+        return
+
+    photo_id = data.get("broadcast_photo_id")
+    await state.clear()
+    await callback.answer("Розсилку підтверджено")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _run_broadcast(callback.message, text_to_send, photo_id)
+
+
+@router.callback_query(F.data == "bc_cancel")
+async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+
+    data = await state.get_data()
+    if data.get("preview_message_id") != callback.message.message_id:
+        await callback.answer("⚠️ Цей попередній перегляд уже неактуальний.", show_alert=True)
+        return
+
+    await state.clear()
+    await callback.answer("Розсилку скасовано")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("❌ Розсилку скасовано. Нічого не надіслано.")
 
 
 @router.message(Command("bc_guest"))

@@ -16,3 +16,7 @@ class WrappedState(StatesGroup):
 
 class SupportStates(StatesGroup):
     waiting_message = State()
+
+
+class BroadcastStates(StatesGroup):
+    waiting_confirmation = State()

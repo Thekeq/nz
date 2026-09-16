@@ -36,6 +36,17 @@ kb_retry = InlineKeyboardMarkup(
 )
 
 
+def broadcast_confirmation_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Підтвердити", callback_data="bc_confirm"),
+                InlineKeyboardButton(text="❌ Скасувати", callback_data="bc_cancel"),
+            ]
+        ]
+    )
+
+
 def build_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
