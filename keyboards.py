@@ -169,9 +169,9 @@ def get_styles_kb():
     return builder.as_markup()
 
 
-def _mark_selected_day(text: str, day: str, selected_day: str) -> str:
-    """Позначає активний день зеленим індикатором у тексті кнопки."""
-    return f"🟢 {text}" if day == selected_day else text
+def _day_button_style(day: str, selected_day: str) -> str | None:
+    """Повертає нативний зелений стиль Telegram для активного дня."""
+    return "success" if day == selected_day else None
 
 
 async def keyboard_diary(selected_day: str = "сьогодні"):
@@ -195,10 +195,10 @@ async def keyboard_diary(selected_day: str = "сьогодні"):
             text = canon_day.capitalize()
             cb_day = canon_day
 
-        text = _mark_selected_day(text, cb_day, selected_day)
         row.append(
             InlineKeyboardButton(
                 text=text,
+                style=_day_button_style(cb_day, selected_day),
                 callback_data=f"diary_day:{cb_day}"
             )
         )
@@ -235,10 +235,10 @@ async def keyboard_hw(selected_day: str = "сьогодні"):
             text = canon_day.capitalize()
             cb_day = canon_day
 
-        text = _mark_selected_day(text, cb_day, selected_day)
         row.append(
             InlineKeyboardButton(
                 text=text,
+                style=_day_button_style(cb_day, selected_day),
                 callback_data=f"diary_hw:{cb_day}"
             )
         )
