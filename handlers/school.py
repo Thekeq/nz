@@ -380,7 +380,7 @@ async def diary_day_selected(callback: CallbackQuery):
         await callback.message.answer("❌ Не вдалося отримати розклад. Спробуйте пізніше.")
         return
 
-    keyboard = await keyboard_diary()
+    keyboard = await keyboard_diary(day)
     if not schedule:
         await callback.message.answer(f"📅 Розклад на {day} не знайдено або сталася помилка.")
     else:
@@ -434,7 +434,7 @@ async def diary_hw_selected(callback: CallbackQuery):
         return
 
     # Отримуємо чисту клавіатуру навігації
-    base_keyboard = await keyboard_hw()
+    base_keyboard = await keyboard_hw(day)
 
     # --- ЗМІНИ ТУТ ---
     # Прикріплюємо кнопку ШІ до НОВОГО тексту (schedule)
