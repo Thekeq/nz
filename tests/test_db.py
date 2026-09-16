@@ -49,21 +49,21 @@ class DataBaseTests(unittest.TestCase):
         self.assertEqual(self.db.get_last_grade_hashes(1), ["a", "b", "c"])
 
     def test_session_cookies_roundtrip_and_delete(self):
-        self.db.set_session_cookies(1, "nz", "encrypted-cookies")
-        self.assertEqual(self.db.get_session_cookies(1, "nz"), "encrypted-cookies")
+        self.db.set_session_cookies(1, "encrypted-cookies")
+        self.assertEqual(self.db.get_session_cookies(1), "encrypted-cookies")
 
-        self.db.delete_session_cookies(1, "nz")
-        self.assertIsNone(self.db.get_session_cookies(1, "nz"))
+        self.db.delete_session_cookies(1)
+        self.assertIsNone(self.db.get_session_cookies(1))
 
     def test_delete_user_clears_sessions_but_keeps_vip(self):
-        self.db.add_user(1, "login", "password", "nz")
+        self.db.add_user(1, "login", "password")
         self.db.set_vip(1, 30)
-        self.db.set_session_cookies(1, "nz", "encrypted-cookies")
+        self.db.set_session_cookies(1, "encrypted-cookies")
 
         self.db.delete_user(1)
 
         self.assertFalse(self.db.has_credentials(1))
-        self.assertIsNone(self.db.get_session_cookies(1, "nz"))
+        self.assertIsNone(self.db.get_session_cookies(1))
         self.assertTrue(self.db.get_vip_status(1)[0])
 
     def test_command_metrics_aggregate_latency_and_errors(self):
@@ -106,7 +106,7 @@ class DigestOptInTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
-        self.db.add_user(1, "login", "encpw", provider="nz")
+        self.db.add_user(1, "login", "encpw")
         self.db.set_creds_verified(1, 1)
         self.db.add_activity(1)
 

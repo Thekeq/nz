@@ -447,10 +447,10 @@ def _open_authorized_page(
                 return
 
             encrypted_cookies = fernet.encrypt(raw_cookies.encode()).decode()
-            db.set_session_cookies(user_id, "nz", encrypted_cookies)
+            db.set_session_cookies(user_id, encrypted_cookies)
 
     if user_id is not None and db and fernet:
-        encrypted = db.get_session_cookies(user_id, "nz")
+        encrypted = db.get_session_cookies(user_id)
         if encrypted:
             try:
                 raw_cookies = fernet.decrypt(encrypted.encode()).decode()
@@ -464,11 +464,11 @@ def _open_authorized_page(
                     return resp, soup
                 logger.debug("Stored NZ session cookies are expired for user_id=%s", user_id)
                 _record_nz_event(db, "cookie_expired")
-                db.delete_session_cookies(user_id, "nz")
+                db.delete_session_cookies(user_id)
             except Exception:
                 logger.exception("Failed to reuse NZ session cookies for user_id=%s", user_id)
                 _record_nz_event(db, "cookie_error")
-                db.delete_session_cookies(user_id, "nz")
+                db.delete_session_cookies(user_id)
 
     logger.debug("Logging in to NZ for user_id=%s", user_id)
     _record_nz_event(db, "login")

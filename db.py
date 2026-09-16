@@ -114,14 +114,12 @@ class DataBase:
             except Exception:
                 pass
 
+            # Старі версії підтримували кілька щоденників. Такі креденшали
+            # більше не використовуються: бот працює лише з Новими Знаннями.
             try:
-                self.connection.execute("ALTER TABLE creds ADD COLUMN provider TEXT NOT NULL DEFAULT 'nz';")
-            except Exception:
-                pass
-
-                # на всякий: старые строки могли остаться NULL
-            try:
-                self.connection.execute("UPDATE creds SET provider='nz' WHERE provider IS NULL OR provider='';")
+                self.connection.execute(
+                    "DELETE FROM creds WHERE provider IS NOT NULL AND lower(provider) <> 'nz'"
+                )
             except Exception:
                 pass
             # last sent grade hash per user
@@ -397,7 +395,7 @@ class DataBase:
                 (amount, user_id)
             )
 
-    def set_session_cookies(self, user_id: int, provider: str, cookies: str):
+    def set_session_cookies(self, user_id: int, cookies: str):
         self.ensure_user(user_id)
         with self.connection:
             self.connection.execute(
@@ -408,26 +406,23 @@ class DataBase:
                     cookies=excluded.cookies,
                     updated_at=excluded.updated_at
                 """,
-                (user_id, provider, cookies)
+                (user_id, "nz", cookies)
             )
 
-    def get_session_cookies(self, user_id: int, provider: str) -> str | None:
+    def get_session_cookies(self, user_id: int) -> str | None:
         with self.connection:
             row = self.connection.execute(
                 "SELECT cookies FROM sessions WHERE user_id=? AND provider=?",
-                (user_id, provider)
+                (user_id, "nz")
             ).fetchone()
             return row[0] if row else None
 
-    def delete_session_cookies(self, user_id: int, provider: str | None = None):
+    def delete_session_cookies(self, user_id: int):
         with self.connection:
-            if provider:
-                self.connection.execute(
-                    "DELETE FROM sessions WHERE user_id=? AND provider=?",
-                    (user_id, provider)
-                )
-            else:
-                self.connection.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            self.connection.execute(
+                "DELETE FROM sessions WHERE user_id=? AND provider=?",
+                (user_id, "nz")
+            )
 
     def record_command_metric(self, command: str, duration_ms: int, ok: bool = True):
         day = datetime.date.today().toordinal()
@@ -603,11 +598,10 @@ class DataBase:
             ).fetchone()
             return bool(int(row[0])) if row else False
 
-    def count_verified_by_provider(self, provider: str) -> int:
+    def count_verified(self) -> int:
         with self.connection:
             row = self.connection.execute(
-                "SELECT COUNT(*) FROM creds WHERE verified=1 AND provider=?",
-                (provider,)
+                "SELECT COUNT(*) FROM creds WHERE verified=1",
             ).fetchone()
             return row[0] if row else 0
 
@@ -622,27 +616,30 @@ class DataBase:
     def get_user(self, user_id: int):
         with self.connection:
             row = self.connection.execute(
-                "SELECT login, password, COALESCE(provider,'nz') FROM creds WHERE user_id=?",
+                "SELECT login, password FROM creds WHERE user_id=?",
                 (user_id,)
             ).fetchone()
-            return row if row else (None, None, "nz")
+            return row if row else (None, None)
 
-    def add_user(self, user_id: int, login: str, password: str, provider: str = "nz"):
+    def add_user(self, user_id: int, login: str, password: str):
         self.ensure_user(user_id)
-        provider = provider if provider in ("nz", "human") else "nz"
         with self.connection:
             self.connection.execute(
                 """
-                INSERT INTO creds(user_id, login, password, provider, updated_at)
-                VALUES (?, ?, ?, ?, strftime('%s','now'))
+                INSERT INTO creds(user_id, login, password, updated_at)
+                VALUES (?, ?, ?, strftime('%s','now'))
                 ON CONFLICT(user_id) DO UPDATE SET
                     login=excluded.login,
                     password=excluded.password,
-                    provider=excluded.provider,
                     updated_at=excluded.updated_at
                 """,
-                (user_id, login, password, provider)
+                (user_id, login, password)
             )
+            # Compatibility with databases created before the NZ-only version.
+            try:
+                self.connection.execute("UPDATE creds SET provider='nz' WHERE user_id=?", (user_id,))
+            except Exception:
+                pass
 
     def delete_user(self, user_id: int):
         # logout: удаляем только логин/пароль, VIP не трогаем
@@ -879,7 +876,7 @@ class DataBase:
         with self.connection:
             return self.connection.execute(
                 """
-                SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
+                SELECT u.user_id, c.login, c.password
                 FROM subs s
                 JOIN users u ON u.user_id=s.user_id
                 LEFT JOIN creds c ON c.user_id=u.user_id
@@ -917,7 +914,7 @@ class DataBase:
         with self.connection:
             return self.connection.execute(
                 """
-                SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
+                SELECT u.user_id, c.login, c.password
                 FROM subs s
                 JOIN users u ON u.user_id=s.user_id
                 LEFT JOIN creds c ON c.user_id=u.user_id
@@ -955,7 +952,7 @@ class DataBase:
         with self.connection:
             return self.connection.execute(
                 """
-                SELECT u.user_id, c.login, c.password, COALESCE(c.provider,'nz')
+                SELECT u.user_id, c.login, c.password
                 FROM subs s
                 JOIN users u ON u.user_id=s.user_id
                 LEFT JOIN creds c ON c.user_id=u.user_id
@@ -1017,13 +1014,13 @@ class DataBase:
     def get_digest_recipients(self, active_days: int = 14):
         """Хто підписаний на дайджест, має підтверджені креди і був активний
         за останні active_days. Фільтр по активності не дає скрапити мертві
-        акаунти щоранку. Повертає (user_id, login, password, provider, is_vip)."""
+        акаунти щоранку. Повертає (user_id, login, password, is_vip)."""
         min_day = datetime.date.today().toordinal() - active_days
         now_ts = int(datetime.datetime.now().timestamp())
         with self.connection:
             rows = self.connection.execute(
                 """
-                SELECT c.user_id, c.login, c.password, COALESCE(c.provider,'nz'),
+                SELECT c.user_id, c.login, c.password,
                        COALESCE(s.vip,0), COALESCE(s.expires,0)
                 FROM creds c
                 LEFT JOIN subs s ON s.user_id=c.user_id
@@ -1039,9 +1036,9 @@ class DataBase:
             ).fetchall()
 
         out = []
-        for user_id, login, password, provider, vip, expires in rows:
+        for user_id, login, password, vip, expires in rows:
             is_vip = bool(vip) and (int(expires or 0) == 0 or int(expires or 0) > now_ts)
-            out.append((user_id, login, password, provider, is_vip))
+            out.append((user_id, login, password, is_vip))
         return out
 
     def get_last_grade_hashes(self, user_id: int) -> list[str]:

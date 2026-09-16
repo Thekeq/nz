@@ -1,5 +1,5 @@
 [Unit]
-Description=NZ/Human diary Telegram bot
+Description=Нові Знання (NZ.ua) Telegram bot
 Documentation=https://github.com/Thekeq/nz
 After=network-online.target
 Wants=network-online.target

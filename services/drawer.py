@@ -92,7 +92,7 @@ def create_gradient(width, height, start_color, end_color):
     return base
 
 
-def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: int, top_subject: str,
+def draw_wrapped(username: str, avg_grade: float, lessons_count: int, top_subject: str,
                  is_vip: bool = False, style_name: str = "default"):
     # 1. Вибираємо тему
     theme = THEMES.get(style_name, THEMES["default"])
@@ -156,7 +156,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
     # --- МАЛЮЄМО ---
 
     # Заголовок
-    draw_centered_text(150, f"{provider.upper()} WRAPPED", font_title, color=theme["title_color"])
+    draw_centered_text(150, "NZ WRAPPED", font_title, color=theme["title_color"])
     draw_centered_text(250, "Мій тиждень навчання", font_small, color=(200, 200, 200))  # Сірий завжди ок
 
     # Привітання
@@ -193,7 +193,7 @@ def draw_wrapped(provider: str, username: str, avg_grade: float, lessons_count: 
     bot_username = os.getenv("BOT_USERNAME", "nzdiary_bot").lstrip("@")
     footer_text = f"Згенеровано у @{bot_username}"
     if is_vip:
-        footer_text = "NZ Diary Premium"
+        footer_text = "Нові Знання Premium"
 
     draw_centered_text_with_icon(
         y=H - 150,

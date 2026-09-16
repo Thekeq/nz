@@ -16,8 +16,6 @@ from textutils import CAPTION_LIMIT
 from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button, result_actions_kb
 from services.diarynz import get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework, \
     InvalidCredentials
-from services.diaryhuman import get_diary_schedule_human, get_diary_homework_human, get_diary_news_human, \
-    get_diary_grades_human
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ async def get_diary(message: Message, state: FSMContext):
 
     if db.has_credentials(user_id):
         try:
-            login, enc_password, provider = db.get_user(user_id)
+            login, enc_password = db.get_user(user_id)
             password = fernet.decrypt(enc_password.encode()).decode()
             is_tiktok = False
             if message.from_user.id == ADMIN_ID:
@@ -46,18 +44,15 @@ async def get_diary(message: Message, state: FSMContext):
                 is_tiktok = TIKTOK_MODE
 
             async with SEMAPHORE:
-                if provider == "human":
-                    schedule = await asyncio.to_thread(get_diary_schedule_human, login, password)
-                else:
-                    schedule = await asyncio.to_thread(
-                        get_diary_schedule,
-                        login,
-                        password,
-                        is_tiktok_mode=is_tiktok,
-                        user_id=user_id,
-                        db=db,
-                        fernet=fernet
-                    )
+                schedule = await asyncio.to_thread(
+                    get_diary_schedule,
+                    login,
+                    password,
+                    is_tiktok_mode=is_tiktok,
+                    user_id=user_id,
+                    db=db,
+                    fernet=fernet
+                )
                 if schedule:  # или другой признак “ок”
                     db.set_creds_verified(user_id, 1)
                     # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -68,11 +63,11 @@ async def get_diary(message: Message, state: FSMContext):
                 now_ts = int(time.time())
                 is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
                 if is_vip:
-                    keyboard = await keyboard_diary(provider)
+                    keyboard = await keyboard_diary()
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_vip_kb())
                     await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
                 else:
-                    keyboard = await keyboard_diary(provider)
+                    keyboard = await keyboard_diary()
                     await message.reply("✅ Ось ваш розклад:", reply_markup=build_main_kb())
                     await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
             else:
@@ -111,25 +106,22 @@ async def homework_cmd(message: Message, state: FSMContext):
         await message.answer("Щоб почати, увійдіть у свій аккаунт\n/login")
         return
 
-    login, enc_password, provider = db.get_user(user_id)
+    login, enc_password = db.get_user(user_id)
     password = fernet.decrypt(enc_password.encode()).decode()
 
     # Отримуємо базову клавіатуру (дні тижня)
-    base_keyboard = await keyboard_hw(provider)
+    base_keyboard = await keyboard_hw()
 
     try:
         async with SEMAPHORE:
-            if provider == "human":
-                text = await asyncio.to_thread(get_diary_homework_human, login, password)
-            else:
-                text = await asyncio.to_thread(
-                    get_diary_homework,
-                    login,
-                    password,
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            text = await asyncio.to_thread(
+                get_diary_homework,
+                login,
+                password,
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
 
             if text:
                 db.set_creds_verified(user_id, 1)
@@ -172,25 +164,22 @@ async def news_command(message: Message, state: FSMContext):
         return
 
     try:
-        login, enc_password, provider = db.get_user(user_id)
+        login, enc_password = db.get_user(user_id)
         if not login or not enc_password:
             await message.answer("❌ У базі немає ваших облікових даних. Виконайте /start заново.")
             return
         password = fernet.decrypt(enc_password.encode()).decode()
 
         async with SEMAPHORE:
-            if provider == "human":
-                text = await asyncio.to_thread(get_diary_news_human, login, password, 10)
-            else:
-                text = await asyncio.to_thread(
-                    get_diary_news,
-                    login,
-                    password,
-                    10,
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            text = await asyncio.to_thread(
+                get_diary_news,
+                login,
+                password,
+                10,
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
             if text:
                 db.set_creds_verified(user_id, 1)
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -287,21 +276,18 @@ async def get_grades(message: Message, state: FSMContext):
         return
 
     try:
-        login, enc_password, provider = db.get_user(user_id)
+        login, enc_password = db.get_user(user_id)
         password = fernet.decrypt(enc_password.encode()).decode()
 
         async with SEMAPHORE:
-            if provider == "human":
-                text = await asyncio.to_thread(get_diary_grades_human, login, password)
-            else:
-                grades, text = await asyncio.to_thread(
-                    get_diary_grades,
-                    login,
-                    password,
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            grades, text = await asyncio.to_thread(
+                get_diary_grades,
+                login,
+                password,
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
 
         # перевіряємо VIP
         vip_flag, expires = db.get_vip_status(user_id)
@@ -309,11 +295,11 @@ async def get_grades(message: Message, state: FSMContext):
         is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
         if is_vip:
-            extra = build_vip_grade_summary_human(text) if provider == "human" else build_vip_grade_summary(text)
+            extra = build_vip_grade_summary(text)
             final_text = f"{text}\n\n{extra}" if extra else text
             final_text = _no_grades_note(text) + final_text
 
-            url = photo_grades(text) if provider == "nz" else None
+            url = photo_grades(text)
 
             if url:
                 # ліміт підпису до фото — 1024, а не 4096: у кого багато
@@ -367,7 +353,7 @@ async def diary_day_selected(callback: CallbackQuery):
 
     day = callback.data.split(":", 1)[1]
 
-    login, enc_password, provider = db.get_user(user_id)
+    login, enc_password = db.get_user(user_id)
     if not login:
         await callback.message.answer("❌ Не знайдено ваш акаунт з логіном у базі.")
         return
@@ -375,18 +361,15 @@ async def diary_day_selected(callback: CallbackQuery):
 
     try:
         async with SEMAPHORE:
-            if provider == "human":
-                schedule = await asyncio.to_thread(get_diary_schedule_human, login, password, days=[day])
-            else:
-                schedule = await asyncio.to_thread(
-                    get_diary_schedule,
-                    login,
-                    password,
-                    days=[day],
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            schedule = await asyncio.to_thread(
+                get_diary_schedule,
+                login,
+                password,
+                days=[day],
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
             if schedule:
                 db.set_creds_verified(user_id, 1)
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -397,7 +380,7 @@ async def diary_day_selected(callback: CallbackQuery):
         await callback.message.answer("❌ Не вдалося отримати розклад. Спробуйте пізніше.")
         return
 
-    keyboard = await keyboard_diary(provider)
+    keyboard = await keyboard_diary()
     if not schedule:
         await callback.message.answer(f"📅 Розклад на {day} не знайдено або сталася помилка.")
     else:
@@ -427,7 +410,7 @@ async def diary_hw_selected(callback: CallbackQuery):
 
     day = callback.data.split(":", 1)[1]
 
-    login, enc_password, provider = db.get_user(user_id)
+    login, enc_password = db.get_user(user_id)
     if not login:
         await callback.message.answer("❌ Не знайдено ваш акаунт.")
         return
@@ -435,18 +418,15 @@ async def diary_hw_selected(callback: CallbackQuery):
 
     try:
         async with SEMAPHORE:
-            if provider == "human":
-                schedule = await asyncio.to_thread(get_diary_homework_human, login, password, mode=day)
-            else:
-                schedule = await asyncio.to_thread(
-                    get_diary_homework,
-                    login,
-                    password,
-                    days=[day],
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            schedule = await asyncio.to_thread(
+                get_diary_homework,
+                login,
+                password,
+                days=[day],
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
 
     except Exception:
         logger.exception("Failed to get homework day for user_id=%s day=%s", user_id, day)
@@ -454,7 +434,7 @@ async def diary_hw_selected(callback: CallbackQuery):
         return
 
     # Отримуємо чисту клавіатуру навігації
-    base_keyboard = await keyboard_hw(provider)
+    base_keyboard = await keyboard_hw()
 
     # --- ЗМІНИ ТУТ ---
     # Прикріплюємо кнопку ШІ до НОВОГО тексту (schedule)
@@ -524,80 +504,3 @@ def build_vip_grade_summary(text: str) -> str:
     )
 
     return forecast_block + rating_block
-
-
-HUMAN_AVG_RE = re.compile(r"⭐️\s*<b>Середній:</b>\s*([0-9]+(?:\.[0-9]+)?)")
-HUMAN_DYN_RE = re.compile(r"^•\s*(\d{2}\.\d{2}):\s*<b>([0-9]+(?:\.[0-9]+)?)</b>", re.MULTILINE)
-
-
-def build_vip_grade_summary_human(text: str) -> str:
-    """
-    VIP-блоки для Human.
-    Робить:
-      📈 Розумний прогноз — по тренду динаміки
-      📊 "Рейтинг" — чесно: поки без предметів, але показує тенденцію та найкращий/найгірший день
-    """
-    m = HUMAN_AVG_RE.search(text)
-    overall = float(m.group(1)) if m else None
-
-    dyn = [(mm, float(avg)) for mm, avg in HUMAN_DYN_RE.findall(text)]
-    # dyn: [("21.11", 9.33), ...] у порядку як у тексті (у тебе найсвіжіші зверху)
-    # переведемо так, щоб старе -> нове
-    dyn_rev = list(reversed(dyn))
-
-    if overall is None and not dyn_rev:
-        return ""
-
-    # ---- прогноз ----
-    forecast_line = "Немає достатньо даних для прогнозу 🙃"
-    trend_line = ""
-
-    if len(dyn_rev) >= 2:
-        first_d, first_v = dyn_rev[0]
-        last_d, last_v = dyn_rev[-1]
-        delta = last_v - first_v
-
-        # дуже простий прогноз: поточний середній + половина тренду за період
-        base = overall if overall is not None else last_v
-        predicted = base + (delta * 0.5)
-
-        # обрізаємо в межі 1..12 (типова шкала)
-        predicted = max(1.0, min(12.0, predicted))
-
-        arrow = "📈" if delta > 0.05 else ("📉" if delta < -0.05 else "➖")
-        trend_line = f"{arrow} Тенденція за період: <b>{delta:+.2f}</b>"
-
-        forecast_line = (
-            f"Якщо ти збережеш поточну тенденцію, очікуваний середній буде близько "
-            f"<b>{predicted:.2f}</b> найближчим часом."
-        )
-
-    elif overall is not None:
-        forecast_line = (
-            f"Якщо тримати поточний темп, середній залишиться близько <b>{overall:.2f}</b>."
-        )
-
-    # ---- “рейтинг” (не предметів, а днів) ----
-    rating_block = ""
-    if dyn_rev:
-        best_day, best_val = max(dyn_rev, key=lambda x: x[1])
-        worst_day, worst_val = min(dyn_rev, key=lambda x: x[1])
-        rating_block = (
-            "📊 <b>Аналіз динаміки</b>\n"
-            f"Найкращий день: <b>{best_day}</b> — <b>{best_val:.2f}</b>\n"
-            f"Найскладніший день: <b>{worst_day}</b> — <b>{worst_val:.2f}</b>"
-        )
-    else:
-        rating_block = (
-            "📊 <b>Аналіз динаміки</b>\n"
-            "—"
-        )
-
-    forecast_block = (
-        "📈 <b>Розумний прогноз оцінок</b>\n"
-        f"{forecast_line}\n"
-    )
-    if trend_line:
-        forecast_block += f"{trend_line}\n"
-
-    return forecast_block + "\n" + rating_block

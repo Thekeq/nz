@@ -241,7 +241,7 @@ async def test_digest(message: Message):
     parts = message.text.split()
     target = int(parts[1]) if len(parts) > 1 and parts[1].lstrip("-").isdigit() else message.from_user.id
 
-    login, enc_password, provider = db.get_user(target)
+    login, enc_password = db.get_user(target)
     if not login or not enc_password:
         await message.answer(f"❌ У {target} немає збережених кредів — дайджест неможливий.")
         return
@@ -250,10 +250,10 @@ async def test_digest(message: Message):
     is_vip = bool(vip_flag) and (expires == 0 or expires > time.time())
 
     await message.answer(
-        f"🧪 Прогоняю дайджест для <code>{target}</code> (provider={provider}, vip={is_vip})…",
+        f"🧪 Прогоняю дайджест для <code>{target}</code> (Нові Знання, vip={is_vip})…",
         parse_mode="HTML"
     )
-    sent = await send_digest_to(target, login, enc_password, provider, is_vip)
+    sent = await send_digest_to(target, login, enc_password, is_vip)
     await message.answer(
         "✅ Дайджест надіслано." if sent
         else "⚪️ Не надіслано: на сьогодні немає уроків або скрап не дав розкладу.\n"
@@ -652,8 +652,7 @@ async def stats(message: Message):
     command_metrics = db.get_command_metrics(days=days, limit=8)
     nz_metrics = db.get_nz_session_metrics(days=days)
 
-    nz_verified = db.count_verified_by_provider("nz")
-    human_verified = db.count_verified_by_provider("human")
+    verified = db.count_verified()
 
     # 3. Генерація графіків (виклики функцій)
     growth_url = _get_growth_chart(growth_labels, growth_data)
@@ -685,8 +684,7 @@ async def stats(message: Message):
         f"👥 <b>Всього юзерів:</b> {stats_data['total']}\n"
         f"├ 🔐 З даними: {stats_data['total_creds']}\n"
         f"├ 🚫 Заблокували бота: {db.count_blocked()}\n"
-        f"├ ✅ NZ Valid: {nz_verified}\n"
-        f"└ ✅ Human Valid: {human_verified}\n\n"
+        f"└ ✅ NZ Valid: {verified}\n\n"
         f"📈 <b>Ріст:</b>\n"
         f"├ 🆕 Сьогодні: +{stats_data['new_today']}\n"
         f"└ 🆕 За {days} днів: +{sum(growth_data)}\n\n"

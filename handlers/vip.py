@@ -23,7 +23,6 @@ from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, v
 from states import AIStates, WrappedState
 from services.ai import ai, AIUnavailable
 from services.drawer import draw_wrapped
-from services.diaryhuman import get_diary_grades_human
 from services.diarynz import get_diary_grades
 
 router = Router()
@@ -518,48 +517,34 @@ async def send_wrapped(message: Message, state: FSMContext):
     name = message.from_user.first_name
 
     try:
-        login, enc_password, provider = db.get_user(user_id)
+        login, enc_password = db.get_user(user_id)
         password = fernet.decrypt(enc_password.encode()).decode()
 
         # 1. ОТРИМАННЯ ДАНИХ
         async with SEMAPHORE:
             days_back = datetime.datetime.now().weekday() + 1
 
-            if provider == "human":
-                text = await asyncio.to_thread(get_diary_grades_human, login, password, days_back)
-                try:
-                    avg = float(re.search(r'Середній:</b>\s*([\d.]+)', text).group(1))
-                    total = int(re.search(r'Всього:\s*<b>(\d+)</b>', text).group(1))
-                    match = re.search(r"🏆 <b>Предмет тижня:</b> (.+)", text)
-                    if match:
-                        best_subject = match.group(1)  # Наприклад: "Геометрія (10.5)"
-                        best_subject = best_subject.rsplit(" (", 1)[0]
-                    else:
-                        best_subject = "Тиша..."
-                except Exception:
-                    avg, total, best_subject = 0.0, 0, "Тиша..."
+            grades, text = await asyncio.to_thread(
+                get_diary_grades,
+                login,
+                password,
+                days_back,
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
+
+            values = [v for v in grades.values() if isinstance(v, (int, float))]
+            filtered = {k: v for k, v in grades.items() if isinstance(v, (int, float))}
+
+            avg = round(sum(values) / len(values), 1) if values else 0.0
+            if filtered:
+                best_subject, best_val = max(filtered.items(), key=lambda x: x[1])
             else:
-                grades, text = await asyncio.to_thread(
-                    get_diary_grades,
-                    login,
-                    password,
-                    days_back,
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+                best_subject = "Тиша..."
 
-                values = [v for v in grades.values() if isinstance(v, (int, float))]
-                filtered = {k: v for k, v in grades.items() if isinstance(v, (int, float))}
-
-                avg = round(sum(values) / len(values), 1) if values else 0.0
-                if filtered:
-                    best_subject, best_val = max(filtered.items(), key=lambda x: x[1])
-                else:
-                    best_subject = "Тиша..."
-
-                counts = re.findall(r'\((\d+)\s+оцінок\)', text)
-                total = sum(map(int, counts))
+            counts = re.findall(r'\((\d+)\s+оцінок\)', text)
+            total = sum(map(int, counts))
 
         # 2. ПЕРЕВІРКА VIP
         # Ексклюзивні стилі — тільки платний VIP (реферальний — базовий стиль)
@@ -570,7 +555,6 @@ async def send_wrapped(message: Message, state: FSMContext):
         # 3. ЛОГІКА ВИБОРУ СТИЛЮ (ЯКЩО ПЛАТНИЙ VIP)
         if is_paid_vip:
             await state.update_data(
-                provider=provider,
                 username=name,
                 avg_grade=avg,
                 lessons_count=total,
@@ -586,7 +570,6 @@ async def send_wrapped(message: Message, state: FSMContext):
             # 4. ГЕНЕРАЦІЯ ДЛЯ ЗВИЧАЙНИХ ЮЗЕРІВ
             photo_bio = await asyncio.to_thread(
                 draw_wrapped,
-                provider=provider,
                 username=name,
                 avg_grade=avg,
                 lessons_count=total,
@@ -606,7 +589,7 @@ async def send_wrapped(message: Message, state: FSMContext):
             sent_msg = await message.answer_photo(
                 photo=BufferedInputFile(photo_bio.read(), filename="wrapped.png"),
                 caption="📸 Твій звіт за тиждень! (Default Style)\n"
-                        "<i>Дані взяті з nz.ua або human.ua</i>\n\n"
+                        "<i>Дані взяті з Нових Знань (nz.ua)</i>\n\n"
                         "Хочеш кастомні стилі (Matrix, Gold)? Придбай /vip",
                 parse_mode="HTML",
                 reply_markup=share_kb  # <--- Додали кнопку сюди
@@ -644,7 +627,6 @@ async def generate_vip_wrapped(callback: CallbackQuery, state: FSMContext):
     try:
         photo_bio = await asyncio.to_thread(
             draw_wrapped,
-            provider=data['provider'],
             username=data['username'],
             avg_grade=data['avg_grade'],
             lessons_count=data['lessons_count'],
@@ -668,7 +650,7 @@ async def generate_vip_wrapped(callback: CallbackQuery, state: FSMContext):
         sent_msg = await callback.message.answer_photo(
             photo=BufferedInputFile(photo_bio.read(), filename="wrapped.png"),
             caption=f"📸 Твій звіт у стилі <b>{selected_style.capitalize()}</b>! 🔥\n"
-                    f"<i>Дані взяті з nz.ua або human.ua</i>\n\n",
+                    f"<i>Дані взяті з Нових Знань (nz.ua)</i>\n\n",
             parse_mode="HTML",
             reply_markup=share_kb  # <--- Додаємо клавіатуру
         )
@@ -778,19 +760,11 @@ async def turn_notify_grades(message: Message):
                              reply_markup=vip_upsell_kb())
         return
 
-    _, _, provider = db.get_user(user_id)
-    if provider == "human":
-        await message.reply(
-            "ℹ️ Сповіщення про оцінки наразі доступні лише для щоденника <b>Нові Знання</b>.\n"
-            "Для <b>Human</b> ця функція зʼявиться пізніше 👀",
-            parse_mode="HTML"
-        )
+    enabled = db.toggle_notify_grades(user_id)
+    if enabled:
+        await message.answer("✅ Сповіщення про нові оцінки увімкнені!")
     else:
-        enabled = db.toggle_notify_grades(user_id)
-        if enabled:
-            await message.answer("✅ Сповіщення про нові оцінки увімкнені!")
-        else:
-            await message.answer("❌ Сповіщення про нові оцінки вимкнені!")
+        await message.answer("❌ Сповіщення про нові оцінки вимкнені!")
 
 
 @router.message(Command("notify_digest"))
@@ -831,15 +805,6 @@ async def turn_notify_homework(message: Message):
         await message.answer("🔒 Сповіщення про нове ДЗ доступні лише VIP-користувачам.\n"
                              "🎁 Хочеш VIP безкоштовно? Запроси друга у /vip",
                              reply_markup=vip_upsell_kb())
-        return
-
-    _, _, provider = db.get_user(user_id)
-    if provider == "human":
-        await message.reply(
-            "ℹ️ Сповіщення про ДЗ наразі працюють лише для щоденника <b>Нові Знання</b>.\n"
-            "Для <b>Human</b> ця функція зʼявиться пізніше 👀",
-            parse_mode="HTML"
-        )
         return
 
     if db.toggle_notify_homework(user_id):

@@ -2,7 +2,6 @@ from aiogram.fsm.state import StatesGroup, State
 
 
 class AuthStates(StatesGroup):
-    provider = State()
     login = State()
     password = State()
 

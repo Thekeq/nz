@@ -29,14 +29,6 @@ def cookie_row(claimed: bool) -> list:
         url=COOKIE_LINK)]]
 
 
-kb_provider = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🟦 Нові Знання (NZ.ua)")],
-        [KeyboardButton(text="🟪 Human")],
-    ],
-    resize_keyboard=True
-)
-
 kb_retry = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="♻️ Спробувати увійти знову", callback_data="retry_login")]
@@ -85,7 +77,7 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
 def share_kb(user_id: int, cookie_claimed: bool = True):
     description = (
         "\n📱 Мій шкільний асистент у Telegram\n\n"
-        "• Оцінки з NZ.ua та Human\n"
+        "• Оцінки з Нових Знань (NZ.ua)\n"
         "• Розклад уроків\n"
         "• Нагадування перед уроком\n\n"
         "Спробуй, це зручніше за сайт 👇"
@@ -108,7 +100,7 @@ def share_kb(user_id: int, cookie_claimed: bool = True):
 
 def invite_friend_kb(user_id: int, label: str = "📤 Поділитися ботом"):
     description = (
-        "Я користуюсь ботом для NZ.ua/Human: розклад, ДЗ, оцінки, новини і нагадування прямо в Telegram."
+        "Я користуюсь ботом для Нових Знань (NZ.ua): розклад, ДЗ, оцінки, новини і нагадування прямо в Telegram."
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -119,7 +111,7 @@ def invite_friend_kb(user_id: int, label: str = "📤 Поділитися бо�
 
 def result_actions_kb(user_id: int, base_kb: InlineKeyboardMarkup | None = None):
     description = (
-        "Зручний бот для школи: розклад, ДЗ, оцінки, новини та нагадування з NZ.ua/Human прямо в Telegram."
+        "Зручний бот для школи: розклад, ДЗ, оцінки, новини та нагадування з Нових Знань (NZ.ua) прямо в Telegram."
     )
     rows = [list(row) for row in base_kb.inline_keyboard] if base_kb else []
     rows.append([
@@ -137,7 +129,7 @@ def payment_keyboard(stars: int = 75):
 def vip_plans_kb(user_id: int, cookie_claimed: bool = True):
     description = (
         "\n📱 Мій шкільний асистент у Telegram\n\n"
-        "• Оцінки з NZ.ua та Human\n"
+        "• Оцінки з Нових Знань (NZ.ua)\n"
         "• Розклад уроків\n"
         "• Нагадування перед уроком\n\n"
         "Спробуй, це зручніше за сайт 👇"
@@ -177,7 +169,7 @@ def get_styles_kb():
     return builder.as_markup()
 
 
-async def keyboard_diary(provider):
+async def keyboard_diary():
     now = datetime.datetime.now(KYIV_TZ)
     weekday = now.weekday()  # 0=Пн ... 6=Нд
 
@@ -190,16 +182,10 @@ async def keyboard_diary(provider):
     for i, canon_day in enumerate(CANONICAL_DAYS):
         if today_idx is not None and i == today_idx:
             text = "Сьогодні"
-            if provider == "human":
-                cb_day = canon_day
-            else:
-                cb_day = "сьогодні"
+            cb_day = "сьогодні"
         elif today_idx is not None and i == today_idx + 1:
             text = "Завтра"
-            if provider == "human":
-                cb_day = canon_day
-            else:
-                cb_day = "завтра"
+            cb_day = "завтра"
         else:
             text = canon_day.capitalize()
             cb_day = canon_day
@@ -222,30 +208,7 @@ async def keyboard_diary(provider):
     return keyboard
 
 
-async def keyboard_hw(provider):
-    if provider == "human":
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="📘 Сьогодні",
-                        callback_data="diary_hw:today"
-                    ),
-                    InlineKeyboardButton(
-                        text="📙 Завтра",
-                        callback_data="diary_hw:tomorrow"
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📚 Тиждень",
-                        callback_data="diary_hw:week"
-                    )
-                ]
-            ]
-        )
-        return keyboard
-
+async def keyboard_hw():
     now = datetime.datetime.now(KYIV_TZ)
     weekday = now.weekday()  # 0=Пн ... 6=Нд
 

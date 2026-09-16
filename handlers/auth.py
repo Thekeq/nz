@@ -6,9 +6,8 @@ from aiogram.filters import Command
 import texts
 from loader import db, fernet, SEMAPHORE
 from states import AuthStates
-from keyboards import kb_provider, kb_retry
+from keyboards import kb_retry
 from services.diarynz import clear_user_session_cache, get_diary_schedule, InvalidCredentials
-from services.diaryhuman import get_diary_schedule_human
 from utils import process_referral_reward
 
 router = Router()
@@ -21,29 +20,13 @@ async def login(message: Message, state: FSMContext):
         await message.reply("Спочатку вийдіть з аккаунту /logout")
         return
 
-    await state.set_state(AuthStates.provider)
-    await message.answer("Оберіть щоденник:", reply_markup=kb_provider)
+    await state.set_state(AuthStates.login)
+    await message.answer("🔑 Введіть логін від Нових Знань (nz.ua):", reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(F.text.in_({texts.BTN_LOGIN}))
 async def login_text(message: Message, state: FSMContext):
     await login(message, state)
-
-
-@router.message(AuthStates.provider)
-async def process_provider(message: Message, state: FSMContext):
-    t = (message.text or "").strip()
-
-    if "Human" in t:
-        provider = "human"
-        prompt = "📧 Введіть email (Human):"
-    else:
-        provider = "nz"
-        prompt = "🔑 Введіть логін (nz.ua):"
-
-    await state.update_data(provider=provider)
-    await state.set_state(AuthStates.login)
-    await message.answer(prompt, reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(AuthStates.login)
@@ -52,14 +35,10 @@ async def process_login(message: Message, state: FSMContext):
         await message.answer("❌ Будь ласка, введіть текстом.")
         return
 
-    data = await state.get_data()
-    provider = data.get("provider", "nz")
-
     await state.update_data(login=message.text.strip())
     await state.set_state(AuthStates.password)
 
-    hint = "🔒 Тепер введіть пароль (Human):" if provider == "human" else "🔒 Тепер введіть пароль (nz.ua):"
-    await message.answer(hint)
+    await message.answer("🔒 Тепер введіть пароль від Нових Знань (nz.ua):")
 
 
 @router.message(AuthStates.password)
@@ -71,7 +50,6 @@ async def process_password(message: Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
 
-    provider = data.get("provider", "nz")
     login = data["login"]
     password = message.text.strip()
 
@@ -79,19 +57,16 @@ async def process_password(message: Message, state: FSMContext):
 
     try:
         async with SEMAPHORE:
-            if provider == "human":
-                schedule = await asyncio.to_thread(get_diary_schedule_human, login, password)
-            else:
-                schedule = await asyncio.to_thread(
-                    get_diary_schedule,
-                    login,
-                    password,
-                    user_id=user_id,
-                    db=db,
-                    fernet=fernet
-                )
+            schedule = await asyncio.to_thread(
+                get_diary_schedule,
+                login,
+                password,
+                user_id=user_id,
+                db=db,
+                fernet=fernet
+            )
 
-        db.add_user(user_id, login, enc_password, provider=provider)
+        db.add_user(user_id, login, enc_password)
         if schedule:
             db.set_creds_verified(user_id, 1)
             # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
@@ -121,19 +96,17 @@ async def process_password(message: Message, state: FSMContext):
     except Exception as e:
         error_text = str(e)  # Перетворюємо помилку в рядок
 
-        # Перевірка на неправильний пароль Human
         if "User not found" in error_text or "password wrong" in error_text:
             await message.answer(
                 "⛔️ <b>Невірний логін або пароль!</b>\n\n"
-                "Human відхилив вхід. Перевірте пошту та пароль і спробуйте ще раз.",
+                "Перевірте логін і пароль від nz.ua та спробуйте ще раз.",
                 parse_mode="HTML",
                 reply_markup=kb_retry
             )
 
-        # Перевірка на інші відомі помилки (наприклад, сервер Human лежить)
         elif "502" in error_text or "504" in error_text or "Server is busy" in error_text:
             await message.answer(
-                "😵 <b>Сайт Human зараз перевантажений.</b>\n"
+                "😵 <b>Сайт NZ.ua зараз перевантажений.</b>\n"
                 "Спробуйте через 5 хвилин.",
                 parse_mode="HTML",
                 reply_markup=kb_retry
@@ -165,7 +138,10 @@ async def retry_login(callback: CallbackQuery, state: FSMContext):
         clear_user_session_cache(user_id)
         db.delete_user(user_id)
 
-    await state.set_state(AuthStates.provider)
-    await callback.message.answer("🔄 Спробуємо ще раз!\nОберіть щоденник:", reply_markup=kb_provider)
+    await state.set_state(AuthStates.login)
+    await callback.message.answer(
+        "🔄 Спробуємо ще раз!\n🔑 Введіть логін від Нових Знань (nz.ua):",
+        reply_markup=ReplyKeyboardRemove(),
+    )
 
     await callback.answer()

@@ -23,7 +23,7 @@ NZ_SCHEDULE = (
     "2. Фізика: —\n"
 )
 
-HUMAN_SCHEDULE = (
+NZ_SCHEDULE_WITH_TIMES = (
     "📅 <b>Сьогодні 08.09.2026</b>\n"
     "1. <i>08:00 - 08:45</i> Алгебра: —\n"
     "2. <i>09:00 - 09:45</i> Хімія: https://us02web.zoom.us/j/123456\n"
@@ -45,7 +45,7 @@ HOMEWORK_HTML = """
 class HasLessonsTests(unittest.TestCase):
     def test_detects_numbered_lessons(self):
         self.assertTrue(has_lessons(NZ_SCHEDULE))
-        self.assertTrue(has_lessons(HUMAN_SCHEDULE))
+        self.assertTrue(has_lessons(NZ_SCHEDULE_WITH_TIMES))
 
     def test_empty_day_is_not_lessons(self):
         self.assertFalse(has_lessons(""))
@@ -58,7 +58,7 @@ class FirstConfLinkTests(unittest.TestCase):
         self.assertEqual(first_conf_link(NZ_SCHEDULE), "https://meet.google.com/aaa-bbb-ccc")
 
     def test_picks_zoom_link(self):
-        self.assertEqual(first_conf_link(HUMAN_SCHEDULE), "https://us02web.zoom.us/j/123456")
+        self.assertEqual(first_conf_link(NZ_SCHEDULE_WITH_TIMES), "https://us02web.zoom.us/j/123456")
 
     def test_no_link(self):
         self.assertIsNone(first_conf_link("1. Фізика: —"))

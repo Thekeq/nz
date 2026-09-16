@@ -1,4 +1,4 @@
-# 🎓 Smart Education Bot (NZ.ua & Human.ua)
+# 🎓 Smart Education Bot for Нові Знання (NZ.ua)
 
 A high-performance asynchronous Telegram bot serving **1000+ active students**. It integrates complex web scraping, REST
 API aggregation, and generative AI to automate educational tracking and provide real-time analytics.
@@ -7,8 +7,7 @@ API aggregation, and generative AI to automate educational tracking and provide 
     
 * **Advanced Web Scraping**: Implements `cloudscraper` and `BeautifulSoup4` to bypass Cloudflare protection and extract
   DOM data from legacy educational platforms without open APIs.
-* **REST API Integration**: Reverse-engineered and integrated the private API of Human.ua, handling dynamic JWT/Session
-  tokens and parsing deeply nested JSON/XML payloads.
+* **NZ.ua Integration**: Securely signs in to Нові Знання and parses schedules, homework, grades, and school news.
 * **Asynchronous Task Queue**: Custom background scheduler (`asyncio`) handling real-time push notifications for lesson
   starts and grade updates with strict rate-limiting (Semaphore).
 * **Multimodal AI Assistant**: Integrated Google Gemini API for personalized homework tutoring, featuring on-the-fly
