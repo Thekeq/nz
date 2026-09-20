@@ -4,7 +4,7 @@ import datetime
 import uuid
 import pytz
 import texts
-from loader import BOT_USERNAME, HW_AI_CACHE, COOKIE_LINK, COOKIE_VIP_DAYS
+from loader import BOT_USERNAME, HW_AI_CACHE, COOKIE_LINK, COOKIE_VIP_DAYS, CHANNEL_URL
 from utils import clean_html
 from urllib.parse import quote
 
@@ -154,7 +154,7 @@ def vip_plans_kb(user_id: int, cookie_claimed: bool = True):
             # хтось інший погодився поставити бота
             *cookie_row(cookie_claimed),
             [InlineKeyboardButton(text="🎁 Безкоштовно: запросити друга", url=_share_url(user_id, description))],
-            [InlineKeyboardButton(text="📣 +3 дні за підписку на канал", url="https://t.me/nzdiaryua")],
+            [InlineKeyboardButton(text="📣 +3 дні за підписку на канал", url=CHANNEL_URL)],
             [InlineKeyboardButton(text="✅ Я підписався", callback_data="check_sub")],
         ]
     )

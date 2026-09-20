@@ -3,7 +3,7 @@ import logging
 from html import escape
 from loader import dp, bot, LOG_LEVEL, db, ADMIN_ID
 from handlers import auth, school, vip, admin, common
-from middlewares import MetricsMiddleware
+from middlewares import ChannelSubscriptionMiddleware, MetricsMiddleware
 from services.background import (
     check_lessons, check_grades, check_homework, memory_cleaner_task,
     daily_backup_task, vip_expiry_task, morning_digest_task,
@@ -45,8 +45,11 @@ async def main():
     logger.info("Bot starting")
 
     metrics = MetricsMiddleware(db)
+    channel_subscription = ChannelSubscriptionMiddleware()
     dp.message.middleware(metrics)
     dp.callback_query.middleware(metrics)
+    dp.message.middleware(channel_subscription)
+    dp.callback_query.middleware(channel_subscription)
 
     # Реєстрація роутерів
     dp.include_router(admin.router)

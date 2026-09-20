@@ -17,7 +17,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import texts
 from loader import (db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME,
-    COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS)
+    COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, CHANNEL_ID, CHANNEL_URL)
 from utils import track_activity, fix_ai_response, user_can_call, compact_num, answer_long
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
@@ -40,8 +40,6 @@ WINBACK_PLAN = {"days": 30, "stars": 50, "tokens": 1_000_000, "title": "VIP на
 WINBACK_GRACE_SEC = 48 * 3600
 
 
-CHANNEL_ID = "@nzdiaryua"
-CHANNEL_URL = "https://t.me/nzdiaryua"
 CHANNEL_BONUS_DAYS = 3
 
 

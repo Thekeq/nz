@@ -25,6 +25,9 @@ if not KEY:
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "1076078800"))
 
+CHANNEL_ID = "@nzdiaryua"
+CHANNEL_URL = "https://t.me/nzdiaryua"
+
 # Cookie Merge на цій же машині: хто перейшов у гру за нашим посиланням
 # (?startapp=src_nz) і зареєструвався там, отримує тиждень VIP тут.
 # Порожній PARTNER_TOKEN — обмін вимкнено (так і на дев-машині, де сусіднього
