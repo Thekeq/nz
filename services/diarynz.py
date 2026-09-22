@@ -976,13 +976,12 @@ def _grade_count_word(count: int) -> str:
 
 
 def _format_grade_list(grades: list[int]) -> str:
-    """Compactly display repeated grades, e.g. ``×5 11, ×2 10, 12``."""
+    """Display grade counts as a descending, compact list."""
     counts = Counter(grades)
-    parts = []
-    for grade in sorted(counts, reverse=True):
-        count = counts[grade]
-        parts.append(f"×{count} {grade}" if count > 1 else str(grade))
-    return ", ".join(parts)
+    return "\n".join(
+        f"{grade} — {counts[grade]} шт."
+        for grade in sorted(counts, reverse=True)
+    )
 
 
 def _needed_twelves(grades: list[int], target: int) -> int:
