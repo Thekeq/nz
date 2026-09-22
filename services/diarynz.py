@@ -929,7 +929,6 @@ def get_diary_grades(
             block.append(
                 f"<b>За рік:</b> <b>{annual_avg}</b> ({len(grades_list)} оцінок)"
             )
-            block.append(_target_progress(grades_list, prefix="🎯 За рік"))
             subject_blocks.append("\n".join(block))
 
         formatted = "\n".join(lines)
@@ -967,14 +966,6 @@ def clear_grade_statement_cache():
     _GRADE_STATEMENT_CACHE.clear()
 
 
-def _grade_count_word(count: int) -> str:
-    if count % 10 == 1 and count % 100 != 11:
-        return "оцінка"
-    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
-        return "оцінки"
-    return "оцінок"
-
-
 def _format_grade_list(grades: list[int]) -> str:
     """Display grade counts as a descending, compact list."""
     counts = Counter(grades)
@@ -1004,12 +995,11 @@ def _needed_twelves(grades: list[int], target: int) -> int:
 
 
 def _target_progress(grades: list[int], prefix: str = "🎯") -> str:
-    parts = []
-    for target in (10, 11, 12):
+    parts = [prefix]
+    for target in (12, 11, 10):
         needed = _needed_twelves(grades, target)
-        value = f"{needed} {_grade_count_word(needed)} 12"
-        parts.append(f"до {target}: {value}")
-    return f"{prefix} " + " · ".join(parts)
+        parts.append(f"{target} — {needed} шт. 12")
+    return "\n".join(parts)
 
 
 @_dedupe_call
