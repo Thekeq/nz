@@ -998,7 +998,7 @@ def _target_progress(grades: list[int], prefix: str = "🎯 Цілі:") -> str:
     parts = [prefix]
     for target in (12, 11, 10):
         needed = _needed_twelves(grades, target)
-        parts.append(f"{target} — {needed} шт. 12")
+        parts.append(f"{target} — {needed} шт. до середнього {target}")
     return "\n".join(parts)
 
 
