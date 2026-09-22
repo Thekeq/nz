@@ -47,6 +47,35 @@ def broadcast_confirmation_kb() -> InlineKeyboardMarkup:
     )
 
 
+def grades_main_kb(page_count: int) -> InlineKeyboardMarkup | None:
+    if page_count <= 0:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"🧾 Усі оцінки (1/{page_count}) ➡️",
+                callback_data="grades_page:0",
+            )]
+        ]
+    )
+
+
+def grades_page_kb(page: int, page_count: int) -> InlineKeyboardMarkup:
+    row = []
+    if page > 0:
+        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"grades_page:{page - 1}"))
+    row.append(InlineKeyboardButton(text=f"📄 {page + 1}/{page_count}", callback_data="grades_page:noop"))
+    if page < page_count - 1:
+        row.append(InlineKeyboardButton(text="➡️", callback_data=f"grades_page:{page + 1}"))
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            row,
+            [InlineKeyboardButton(text="🏠 Головна", callback_data="grades_main")],
+        ]
+    )
+
+
 def build_main_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[

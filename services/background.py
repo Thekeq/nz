@@ -11,8 +11,8 @@ from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
     USER_LAST_CALL, KYIV_TZ, fernet,
     COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS
 )
-from services.diarynz import (cleanup_session_cache, get_diary_schedule, get_grade_events,
-    get_diary_homework, get_homework_events
+from services.diarynz import (cleanup_session_cache, clear_grade_statement_cache,
+    get_diary_schedule, get_grade_events, get_diary_homework, get_homework_events
 )
 from services.digest import has_lessons, has_conf_link, build_digest_text, is_school_time
 from utils import safe_send
@@ -190,6 +190,7 @@ async def memory_cleaner_task():
         WRAPPED_CACHE.clear()
         HW_AI_CACHE.clear()
         cleanup_session_cache()
+        clear_grade_statement_cache()
 
         now = datetime.datetime.now(KYIV_TZ)
         today = now.date().isoformat()

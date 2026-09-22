@@ -13,9 +13,14 @@ import texts
 from loader import db, fernet, SEMAPHORE, ADMIN_ID
 from utils import user_can_call, track_activity, process_referral_reward, answer_long
 from textutils import CAPTION_LIMIT
-from keyboards import kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button, result_actions_kb
-from services.diarynz import get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework, \
-    InvalidCredentials
+from keyboards import (
+    kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button,
+    result_actions_kb, grades_main_kb, grades_page_kb,
+)
+from services.diarynz import (
+    get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework,
+    get_grade_statement, set_grade_statement_main, InvalidCredentials,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -298,6 +303,9 @@ async def get_grades(message: Message, state: FSMContext):
             extra = build_vip_grade_summary(text)
             final_text = f"{text}\n\n{extra}" if extra else text
             final_text = _no_grades_note(text) + final_text
+            set_grade_statement_main(user_id, final_text)
+            _, grade_pages = get_grade_statement(user_id)
+            actions_kb = result_actions_kb(user_id, grades_main_kb(len(grade_pages)))
 
             url = photo_grades(text)
 
@@ -307,20 +315,27 @@ async def get_grades(message: Message, state: FSMContext):
                 if len(final_text) <= CAPTION_LIMIT:
                     await message.answer_photo(
                         photo=url, caption=final_text, parse_mode="HTML",
-                        reply_markup=result_actions_kb(user_id)
+                        reply_markup=actions_kb
                     )
                 else:
                     await message.answer_photo(photo=url, caption="📊 Твоя статистика")
                     await answer_long(
                         message, final_text,
-                        reply_markup=result_actions_kb(user_id), parse_mode="HTML"
+                        reply_markup=actions_kb, parse_mode="HTML"
                     )
             else:
-                await answer_long(message, final_text, reply_markup=result_actions_kb(user_id), parse_mode="HTML")
+                await answer_long(message, final_text, reply_markup=actions_kb, parse_mode="HTML")
 
         else:
-            await answer_long(message, _no_grades_note(text) + text,
-                              reply_markup=result_actions_kb(user_id), parse_mode="HTML")
+            final_text = _no_grades_note(text) + text
+            set_grade_statement_main(user_id, final_text)
+            _, grade_pages = get_grade_statement(user_id)
+            await answer_long(
+                message,
+                final_text,
+                reply_markup=result_actions_kb(user_id, grades_main_kb(len(grade_pages))),
+                parse_mode="HTML",
+            )
 
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)
@@ -330,6 +345,63 @@ async def get_grades(message: Message, state: FSMContext):
         await message.answer(
             "❌ Сталася помилка. Спробуйте пізніше.",
             reply_markup=kb_retry
+        )
+
+
+@router.callback_query(F.data.startswith("grades_page:"))
+async def grades_page_selected(callback: CallbackQuery):
+    payload = callback.data.split(":", 1)[1]
+    if payload == "noop":
+        await callback.answer()
+        return
+
+    try:
+        page = int(payload)
+    except ValueError:
+        await callback.answer("⚠️ Сторінку не знайдено.", show_alert=True)
+        return
+
+    _, pages = get_grade_statement(callback.from_user.id)
+    if not pages or page < 0 or page >= len(pages):
+        await callback.answer("⚠️ Виписка застаріла. Відкрий оцінки ще раз.", show_alert=True)
+        return
+
+    await callback.answer()
+    markup = result_actions_kb(
+        callback.from_user.id,
+        grades_page_kb(page, len(pages)),
+    )
+    if callback.message and callback.message.text is not None:
+        await callback.message.edit_text(
+            pages[page], parse_mode="HTML", reply_markup=markup
+        )
+    elif callback.message:
+        # VIP може показувати головну сторінку як фото: текстову виписку
+        # отправляем отдельным сообщением, чтобы не терять график.
+        await callback.message.answer(
+            pages[page], parse_mode="HTML", reply_markup=markup
+        )
+
+
+@router.callback_query(F.data == "grades_main")
+async def grades_main_selected(callback: CallbackQuery):
+    main_text, pages = get_grade_statement(callback.from_user.id)
+    if not main_text or not pages:
+        await callback.answer("⚠️ Виписка застаріла. Відкрий оцінки ще раз.", show_alert=True)
+        return
+
+    await callback.answer()
+    markup = result_actions_kb(
+        callback.from_user.id,
+        grades_main_kb(len(pages)),
+    )
+    if callback.message and callback.message.text is not None:
+        await callback.message.edit_text(
+            main_text, parse_mode="HTML", reply_markup=markup
+        )
+    elif callback.message:
+        await callback.message.answer(
+            main_text, parse_mode="HTML", reply_markup=markup
         )
 
 

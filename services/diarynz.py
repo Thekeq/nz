@@ -24,6 +24,7 @@ _SESSION_LOCKS: dict[int, threading.RLock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
 _SCRAPER_CACHE: dict[int, dict] = {}
 _SCRAPER_CACHE_TTL = 20 * 60
+_GRADE_STATEMENT_CACHE: dict[int, dict] = {}
 # Кожен scraper тримає TCP-з'єднання і Cloudflare-кліренс у пам'яті.
 # На VPS з 1 ГБ RAM необмежений кеш — прямий шлях до OOM у години пік,
 # тому витісняємо найдавніше використані.
@@ -907,30 +908,41 @@ def get_diary_grades(
             header += f"📅 За останні {days_back} днів\n"
         header += "\n📊 <b>Середній бал за рік:</b>\n\n"
 
-        lines = [header, *summary_lines, "\n🧾 <b>Усі оцінки по семестрах:</b>"]
-
+        lines = [header, *summary_lines]
+        subject_blocks = []
         for subj in subjects:
             grades_list = all_grades_data[subj]
-            lines.append(f"\n📚 <b>{html.escape(subj)}</b>")
+            block = [f"📚 <b>{html.escape(subj)}</b>"]
 
             for semester_label, semester_data in semester_grades_data:
                 grades = semester_data.get(subj, [])
                 if not grades:
                     continue
                 avg = round(sum(grades) / len(grades), 2)
-                lines.append(
+                block.append(
                     f"<b>{semester_label}:</b> {', '.join(map(str, grades))}"
                 )
-                lines.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
-                lines.append(_target_progress(grades))
+                block.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
+                block.append(_target_progress(grades))
 
             annual_avg = round(sum(grades_list) / len(grades_list), 2)
-            lines.append(
+            block.append(
                 f"<b>За рік:</b> <b>{annual_avg}</b> ({len(grades_list)} оцінок)"
             )
-            lines.append(_target_progress(grades_list, prefix="🎯 За рік"))
+            block.append(_target_progress(grades_list, prefix="🎯 За рік"))
+            subject_blocks.append("\n".join(block))
 
         formatted = "\n".join(lines)
+        page_count = math.ceil(len(subject_blocks) / 2)
+        pages = [
+            (
+                f"🧾 <b>Усі оцінки по семестрах</b> · "
+                f"{index // 2 + 1}/{page_count}\n\n"
+                + "\n\n".join(subject_blocks[index:index + 2])
+            )
+            for index in range(0, len(subject_blocks), 2)
+        ]
+        _GRADE_STATEMENT_CACHE[user_id] = {"main": formatted, "pages": pages}
 
         return final_averages, formatted
 
@@ -939,6 +951,20 @@ def get_diary_grades(
         return {}, f"Помилка отримання даних: {e}"
     finally:
         _release_scraper(user_id, scraper, keep=user_id is not None)
+
+
+def set_grade_statement_main(user_id: int, text: str):
+    report = _GRADE_STATEMENT_CACHE.setdefault(user_id, {"main": "", "pages": []})
+    report["main"] = text
+
+
+def get_grade_statement(user_id: int) -> tuple[str, list[str]]:
+    report = _GRADE_STATEMENT_CACHE.get(user_id, {})
+    return report.get("main", ""), list(report.get("pages", []))
+
+
+def clear_grade_statement_cache():
+    _GRADE_STATEMENT_CACHE.clear()
 
 
 def _grade_count_word(count: int) -> str:
