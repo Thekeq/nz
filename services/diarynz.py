@@ -977,26 +977,28 @@ def _format_grade_list(grades: list[int]) -> str:
 
 
 def _needed_twelves(grades: list[int], target: int) -> int:
-    """Return how many future 12s are needed for a rounded target grade.
-
-    NZ's tabular result is treated as rounding up: 11.40 becomes 12.
-    """
+    """Return how many future 12s are needed for a rounded target grade."""
     if not grades:
         return 1
 
     total = sum(grades)
     count = len(grades)
-    if math.ceil(total / count) >= target:
+    target_threshold = 2 * target - 1  # target - 0.5, rounded half up
+    difference = target_threshold * count - 2 * total
+    if difference <= 0:
         return 0
 
-    # ceil(average) >= target is equivalent to average > target - 1.
-    threshold = target - 1
-    difference = threshold * count - total
-    return difference // (12 - threshold) + 1
+    denominator = 24 - target_threshold  # 2 * (12 - target + 0.5)
+    return (difference + denominator - 1) // denominator
+
+
+def _rounded_tabular_grade(grades: list[int]) -> int:
+    """Round a positive grade average to the nearest integer, half up."""
+    return (2 * sum(grades) + len(grades)) // (2 * len(grades))
 
 
 def _target_progress(grades: list[int]) -> str:
-    current_grade = math.ceil(sum(grades) / len(grades))
+    current_grade = _rounded_tabular_grade(grades)
     if current_grade >= 12:
         return "🎯 Цілі: Максимальний рівень досягнуто! 🎉"
 
