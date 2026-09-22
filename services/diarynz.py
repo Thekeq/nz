@@ -932,14 +932,14 @@ def get_diary_grades(
             subject_blocks.append("\n".join(block))
 
         formatted = "\n".join(lines)
-        page_count = math.ceil(len(subject_blocks) / 2)
+        page_count = math.ceil(len(subject_blocks) / 4)
         pages = [
             (
                 f"🧾 <b>Усі оцінки по семестрах</b> · "
-                f"{index // 2 + 1}/{page_count}\n\n"
-                + "\n\n".join(subject_blocks[index:index + 2])
+                f"{index // 4 + 1}/{page_count}\n\n"
+                + "\n\n".join(subject_blocks[index:index + 4])
             )
-            for index in range(0, len(subject_blocks), 2)
+            for index in range(0, len(subject_blocks), 4)
         ]
         _GRADE_STATEMENT_CACHE[user_id] = {"main": formatted, "pages": pages}
 
@@ -969,8 +969,8 @@ def clear_grade_statement_cache():
 def _format_grade_list(grades: list[int]) -> str:
     """Display grade counts as a descending, compact list."""
     counts = Counter(grades)
-    return "\n".join(
-        f"{grade} — {counts[grade]} шт."
+    return " <b>|</b> ".join(
+        f"{grade}x{counts[grade]}"
         for grade in sorted(counts, reverse=True)
     )
 
