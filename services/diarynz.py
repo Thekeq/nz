@@ -9,7 +9,7 @@ import inspect
 import time
 from contextlib import contextmanager
 from concurrent.futures import Future
-from collections import defaultdict
+from collections import Counter, defaultdict
 from urllib.parse import urljoin
 import hashlib
 import cloudscraper
@@ -920,7 +920,7 @@ def get_diary_grades(
                     continue
                 avg = round(sum(grades) / len(grades), 2)
                 block.append(
-                    f"<b>{semester_label}:</b> {', '.join(map(str, grades))}"
+                    f"<b>{semester_label}:</b> {_format_grade_list(grades)}"
                 )
                 block.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
                 block.append(_target_progress(grades))
@@ -973,6 +973,16 @@ def _grade_count_word(count: int) -> str:
     if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
         return "оцінки"
     return "оцінок"
+
+
+def _format_grade_list(grades: list[int]) -> str:
+    """Compactly display repeated grades, e.g. ``×5 11, ×2 10, 12``."""
+    counts = Counter(grades)
+    parts = []
+    for grade in sorted(counts, reverse=True):
+        count = counts[grade]
+        parts.append(f"×{count} {grade}" if count > 1 else str(grade))
+    return ", ".join(parts)
 
 
 def _needed_twelves(grades: list[int], target: int) -> int:
