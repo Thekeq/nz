@@ -1002,7 +1002,7 @@ def _target_progress(grades: list[int]) -> str:
 
     target = current_grade + 1
     needed = _needed_twelves(grades, target)
-    return f"🎯 Цілі: +{needed} до {target}.00"
+    return f"🎯 Цілі: 12x{needed} до {target}.00"
 
 
 @_dedupe_call
