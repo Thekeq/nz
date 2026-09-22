@@ -1,5 +1,6 @@
 import re
 import html
+import math
 import logging
 import json
 import threading
@@ -810,21 +811,25 @@ def get_diary_grades(
 
         current_year_str = year_match.group(1)  # "2025-2026"
 
-        # Собираем ID всех семестров, которые относятся к ЭТОМУ году
-        # Например, найдем ID для "2025-2026 [1]" и "2025-2026 [2]"
-        target_semester_ids = []
-        for option in select_box.find_all("option"):
-            if current_year_str in option.get_text():
-                target_semester_ids.append(option["value"])
-
-        # Если мы не нашли семестров (странно), берем хотя бы текущий
-        if not target_semester_ids:
-            target_semester_ids.append(selected_option["value"])
+        semester_options = []
+        for index, option in enumerate(select_box.find_all("option"), start=1):
+            if current_year_str not in option.get_text():
+                continue
+            semester_number = re.search(r"\[(\d+)\]", option.get_text())
+            semester_label = (
+                f"{semester_number.group(1)} семестр"
+                if semester_number else f"{index} семестр"
+            )
+            semester_options.append((option["value"], semester_label))
+        if not semester_options:
+            semester_options = [(selected_option["value"], "Поточний семестр")]
 
         # --- 3. СБОР ОЦЕНОК ПО ВСЕМ СЕМЕСТРАМ ---
 
-        # Словарь для хранения ВСЕХ оценок: {"Математика": [10, 11, 9], "Физика": [8]}
+        # Храним и общий список, и разбивку по семестрам, чтобы показать
+        # пользователю каждую оценку отдельно.
         all_grades_data = defaultdict(list)
+        semester_grades_data = []
 
         # Ищем CSRF токен конкретно для формы смены семестра (он может отличаться)
         semester_form = soup.find("form", {"id": "semester-select-form"})
@@ -840,7 +845,7 @@ def get_diary_grades(
 
         try:
             # Проходимся по каждому семестру года (1-й и 2-й)
-            for sem_id in target_semester_ids:
+            for sem_id, semester_label in semester_options:
                 _change_semester(scraper, semester_csrf, sem_id)
 
                 # Загружаем страницу оценок для этого семестра.
@@ -855,6 +860,8 @@ def get_diary_grades(
                 sem_soup = BeautifulSoup(diary_resp.text, "html.parser")
 
                 table = sem_soup.select_one("table.marks-report tbody")
+                semester_data = defaultdict(list)
+                semester_grades_data.append((semester_label, semester_data))
                 if not table:
                     continue
 
@@ -870,6 +877,7 @@ def get_diary_grades(
                     nums = [int(n) for n in nums]
 
                     if nums:
+                        semester_data[subj].extend(nums)
                         all_grades_data[subj].extend(nums)
         finally:
             if original_semester_id:
@@ -881,26 +889,48 @@ def get_diary_grades(
         # --- 4. РАСЧЕТ ИТОГОВОГО СРЕДНЕГО ---
 
         final_averages = {}
-        lines = []
+        summary_lines = []
+        subjects = sorted(all_grades_data.keys())
 
-        # Сортируем предметы по алфавиту для красоты
-        for subj in sorted(all_grades_data.keys()):
+        # Этот короткий блок сохраняем в прежнем формате: его используют
+        # график и VIP-аналитика.
+        for subj in subjects:
             grades_list = all_grades_data[subj]
-            if grades_list:
-                avg = round(sum(grades_list) / len(grades_list), 2)
-                final_averages[subj] = avg
-                lines.append(f"{subj}: {avg} ({len(grades_list)} оцінок)")
-            else:
-                final_averages[subj] = None
-                lines.append(f"{subj}: — (нема оцінок)")
+            avg = round(sum(grades_list) / len(grades_list), 2)
+            final_averages[subj] = avg
+            summary_lines.append(
+                f"{html.escape(subj)}: {avg} ({len(grades_list)} оцінок)"
+            )
 
-        # Заголовок
-        header = f"🎓 <b>Річна статистика ({current_year_str})</b>\n"
+        header = f"🎓 <b>Виписка оцінок за {current_year_str}</b>\n"
         if days_back:
             header += f"📅 За останні {days_back} днів\n"
-        header += "\n📊 Середній бал (Семестр 1 + 2):\n\n"
+        header += "\n📊 <b>Середній бал за рік:</b>\n\n"
 
-        formatted = header + "\n".join(lines)
+        lines = [header, *summary_lines, "\n🧾 <b>Усі оцінки по семестрах:</b>"]
+
+        for subj in subjects:
+            grades_list = all_grades_data[subj]
+            lines.append(f"\n📚 <b>{html.escape(subj)}</b>")
+
+            for semester_label, semester_data in semester_grades_data:
+                grades = semester_data.get(subj, [])
+                if not grades:
+                    continue
+                avg = round(sum(grades) / len(grades), 2)
+                lines.append(
+                    f"<b>{semester_label}:</b> {', '.join(map(str, grades))}"
+                )
+                lines.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
+                lines.append(_target_progress(grades))
+
+            annual_avg = round(sum(grades_list) / len(grades_list), 2)
+            lines.append(
+                f"<b>За рік:</b> <b>{annual_avg}</b> ({len(grades_list)} оцінок)"
+            )
+            lines.append(_target_progress(grades_list, prefix="🎯 За рік"))
+
+        formatted = "\n".join(lines)
 
         return final_averages, formatted
 
@@ -909,6 +939,41 @@ def get_diary_grades(
         return {}, f"Помилка отримання даних: {e}"
     finally:
         _release_scraper(user_id, scraper, keep=user_id is not None)
+
+
+def _grade_count_word(count: int) -> str:
+    if count % 10 == 1 and count % 100 != 11:
+        return "оцінка"
+    if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        return "оцінки"
+    return "оцінок"
+
+
+def _needed_twelves(grades: list[int], target: int) -> int | None:
+    """Return how many future 12s are needed to reach a target average."""
+    if not grades:
+        return 1
+
+    total = sum(grades)
+    count = len(grades)
+    if total / count >= target:
+        return 0
+    if target == 12:
+        return None
+
+    return math.ceil((target * count - total) / (12 - target))
+
+
+def _target_progress(grades: list[int], prefix: str = "🎯") -> str:
+    parts = []
+    for target in (10, 11, 12):
+        needed = _needed_twelves(grades, target)
+        if needed is None:
+            value = "неможливо (є оцінки нижче 12)"
+        else:
+            value = f"{needed} {_grade_count_word(needed)} 12"
+        parts.append(f"до {target}: {value}")
+    return f"{prefix} " + " · ".join(parts)
 
 
 @_dedupe_call
