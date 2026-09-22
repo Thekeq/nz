@@ -975,29 +975,30 @@ def _grade_count_word(count: int) -> str:
     return "оцінок"
 
 
-def _needed_twelves(grades: list[int], target: int) -> int | None:
-    """Return how many future 12s are needed to reach a target average."""
+def _needed_twelves(grades: list[int], target: int) -> int:
+    """Return how many future 12s are needed for a rounded target grade.
+
+    NZ's tabular result is treated as rounding up: 11.40 becomes 12.
+    """
     if not grades:
         return 1
 
     total = sum(grades)
     count = len(grades)
-    if total / count >= target:
+    if math.ceil(total / count) >= target:
         return 0
-    if target == 12:
-        return None
 
-    return math.ceil((target * count - total) / (12 - target))
+    # ceil(average) >= target is equivalent to average > target - 1.
+    threshold = target - 1
+    difference = threshold * count - total
+    return difference // (12 - threshold) + 1
 
 
 def _target_progress(grades: list[int], prefix: str = "🎯") -> str:
     parts = []
     for target in (10, 11, 12):
         needed = _needed_twelves(grades, target)
-        if needed is None:
-            value = "неможливо (є оцінки нижче 12)"
-        else:
-            value = f"{needed} {_grade_count_word(needed)} 12"
+        value = f"{needed} {_grade_count_word(needed)} 12"
         parts.append(f"до {target}: {value}")
     return f"{prefix} " + " · ".join(parts)
 
