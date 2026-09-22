@@ -109,6 +109,7 @@ def fix_ai_response(text: str) -> str:
 
 
 REF_REWARD_DAYS = 3
+REF_REWARD_INVITES = 1
 REF_MONTHLY_CAP = 3  # максимум нагород на 30 днів (= 9 днів VIP)
 
 # Акція на вересень: перший запрошений друг дає 5 днів замість 3.
@@ -136,7 +137,7 @@ async def process_referral_reward(user_id: int):
         return
 
     count = db.add_invite_and_get(referrer_id, 1)
-    need_invite = 1
+    need_invite = REF_REWARD_INVITES
 
     if count < need_invite:
         await safe_send(

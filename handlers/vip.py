@@ -18,7 +18,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import texts
 from loader import (db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME,
     COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, CHANNEL_ID, CHANNEL_URL)
-from utils import track_activity, fix_ai_response, user_can_call, compact_num, answer_long
+from utils import (
+    track_activity, fix_ai_response, user_can_call, compact_num, answer_long,
+    REF_REWARD_INVITES,
+)
 from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
 from states import AIStates, WrappedState
 from services.ai import ai, AIUnavailable
@@ -38,6 +41,7 @@ VIP_PLANS = {
 # Win-back: 48 годин після закінчення VIP — місяць зі знижкою
 WINBACK_PLAN = {"days": 30, "stars": 50, "tokens": 1_000_000, "title": "VIP на 1 місяць (-33%)", "label": "1 місяць"}
 WINBACK_GRACE_SEC = 48 * 3600
+VIP_EXPIRY_NOTICE_SEC = 48 * 3600
 
 
 CHANNEL_BONUS_DAYS = 3
@@ -103,7 +107,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
     invites_left, total_invites = db.get_invite_progress(user_id)
     now_ts = int(time.time())
     is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-    progress_text = f"{invites_left}/1 до наступних 3 днів VIP"
+    progress_text = f"{invites_left}/{REF_REWARD_INVITES} до наступних 3 днів VIP"
     # Обмін увімкнено тільки коли є токен: без нього нагороду ніхто не видасть,
     # і кнопка вела б у гру з обіцянкою, яку нема кому виконати
     cookie_claimed = (not COOKIE_API_TOKEN
@@ -141,7 +145,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             "автоматично, платити нічого не треба.\n\n")
         await message_object.answer(
             f"{cookie_line}"
-            "🎁 Безкоштовний VIP: 1 друг → 3 дні VIP (до 9 днів на місяць)\n"
+            f"🎁 Безкоштовний VIP: {REF_REWARD_INVITES} друг → 3 дні VIP (до 9 днів на місяць)\n"
             f"Прогрес: <b>{progress_text}</b>\n"
             f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання: https://t.me/{BOT_USERNAME}?start={user_id}\n\n"
@@ -198,7 +202,9 @@ async def buy_winback(callback: CallbackQuery):
     active = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
     # знижка діє лише 48 годин після закінчення VIP
-    if active or not expires or now_ts > expires + WINBACK_GRACE_SEC:
+    in_pre_expiry_window = active and expires <= now_ts + VIP_EXPIRY_NOTICE_SEC
+    in_post_expiry_window = not active and expires and now_ts <= expires + WINBACK_GRACE_SEC
+    if not expires or (not in_pre_expiry_window and not in_post_expiry_window):
         await callback.answer("⌛️ Ця пропозиція вже недійсна", show_alert=True)
         return
 

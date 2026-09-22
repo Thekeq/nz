@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import math
 import os
 import time
 import re
@@ -9,13 +10,13 @@ import requests
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
     USER_LAST_CALL, KYIV_TZ, fernet,
-    COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS
+    COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, BOT_USERNAME
 )
 from services.diarynz import (cleanup_session_cache, clear_grade_statement_cache,
     get_diary_schedule, get_grade_events, get_diary_homework, get_homework_events
 )
 from services.digest import has_lessons, has_conf_link, build_digest_text, is_school_time
-from utils import safe_send
+from utils import safe_send, REF_REWARD_INVITES
 import gc
 
 logger = logging.getLogger(__name__)
@@ -359,6 +360,7 @@ async def check_homework():
 
 
 WINBACK_GRACE_SEC = 48 * 3600  # тримати синхронно з handlers/vip.py
+VIP_EXPIRY_NOTICE_SEC = 48 * 3600
 
 
 async def vip_expiry_task():
@@ -366,23 +368,33 @@ async def vip_expiry_task():
     і win-back знижка протягом 48 годин після."""
     while True:
         try:
-            for user_id, expires in db.get_vips_expiring_within(24 * 3600):
+            winback_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔥 Продовжити за 50 ⭐️ (-33%)", callback_data="buy_winback")]
+            ])
+
+            for user_id, expires in db.get_vips_expiring_within(VIP_EXPIRY_NOTICE_SEC):
+                hours_left = max(1, math.ceil((expires - time.time()) / 3600))
                 if await safe_send(user_id,
-                    "⏳ <b>Твій VIP закінчується завтра!</b>\n"
+                    f"⏳ <b>Твій VIP закінчується приблизно через {hours_left} годин!</b>\n"
                     "Після цього вимкнуться ⏰ нагадування перед уроками "
                     "і 🔔 сповіщення про оцінки.\n\n"
-                    "Продовжити: /vip", parse_mode="HTML"
+                    "Продовжити зараз зі знижкою:\n"
+                    f"Або запроси <b>{REF_REWARD_INVITES}</b> друга за своїм посиланням "
+                    "і продовж VIP безкоштовно!\n"
+                    f"https://t.me/{BOT_USERNAME}?start={user_id}",
+                    parse_mode="HTML", reply_markup=winback_kb
                 ):
                     db.set_expiry_stage(user_id, 1)
                 await asyncio.sleep(0.25)
 
-            winback_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔥 Місяць за 50 ⭐️ (-33%)", callback_data="buy_winback")]
-            ])
             for user_id, expires in db.get_vips_just_expired(WINBACK_GRACE_SEC):
                 if await safe_send(user_id,
                     "😔 <b>VIP закінчився</b> — нагадування і сповіщення вимкнено.\n\n"
-                    "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>", parse_mode="HTML", reply_markup=winback_kb
+                    "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>\n\n"
+                    f"Або запроси <b>{REF_REWARD_INVITES}</b> друга за своїм посиланням "
+                    "і продовж VIP безкоштовно!\n"
+                    f"https://t.me/{BOT_USERNAME}?start={user_id}",
+                    parse_mode="HTML", reply_markup=winback_kb
                 ):
                     db.set_expiry_stage(user_id, 2)
                     db.record_command_metric("funnel:winback_sent", 0)
