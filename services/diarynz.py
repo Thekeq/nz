@@ -936,7 +936,8 @@ def get_diary_grades(
         pages = [
             (
                 f"🧾 <b>Усі оцінки по семестрах</b> · "
-                f"{index // 4 + 1}/{page_count}\n\n"
+                f"{index // 4 + 1}/{page_count}\n"
+                "Формат: оцінка x кількість оцінок\n\n"
                 + "\n\n".join(subject_blocks[index:index + 4])
             )
             for index in range(0, len(subject_blocks), 4)
