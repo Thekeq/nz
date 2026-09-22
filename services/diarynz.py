@@ -994,7 +994,7 @@ def _needed_twelves(grades: list[int], target: int) -> int:
     return difference // (12 - threshold) + 1
 
 
-def _target_progress(grades: list[int], prefix: str = "🎯") -> str:
+def _target_progress(grades: list[int], prefix: str = "🎯 Цілі:") -> str:
     parts = [prefix]
     for target in (12, 11, 10):
         needed = _needed_twelves(grades, target)
