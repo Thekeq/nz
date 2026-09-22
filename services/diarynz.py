@@ -994,12 +994,14 @@ def _needed_twelves(grades: list[int], target: int) -> int:
     return difference // (12 - threshold) + 1
 
 
-def _target_progress(grades: list[int], prefix: str = "🎯 Цілі:") -> str:
-    parts = [prefix]
-    for target in (12, 11, 10):
-        needed = _needed_twelves(grades, target)
-        parts.append(f"{target} — {needed} шт. до середнього {target}")
-    return "\n".join(parts)
+def _target_progress(grades: list[int]) -> str:
+    current_grade = math.ceil(sum(grades) / len(grades))
+    if current_grade >= 12:
+        return "🎯 Цілі: Максимальний рівень досягнуто! 🎉"
+
+    target = current_grade + 1
+    needed = _needed_twelves(grades, target)
+    return f"🎯 Цілі: +{needed} до {target}.00"
 
 
 @_dedupe_call
