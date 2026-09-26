@@ -164,6 +164,19 @@ class DataBase:
             """)
 
             self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_wrapped_sends (
+                  user_id    INTEGER NOT NULL,
+                  week_key   TEXT NOT NULL,
+                  status     TEXT NOT NULL,
+                  reason     TEXT NOT NULL DEFAULT '',
+                  sent_at    INTEGER,
+                  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                  PRIMARY KEY(user_id, week_key),
+                  FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+            """)
+
+            self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS nz_session_metrics (
                   day     INTEGER NOT NULL,
                   event   TEXT NOT NULL,
@@ -468,6 +481,67 @@ class DataBase:
                 "errors": int(row[2] or 0),
                 "avg_ms": int((row[3] or 0) / row[1]) if row[1] else 0,
                 "max_ms": int(row[4] or 0),
+            }
+            for row in rows
+        ]
+
+    def try_claim_weekly_wrapped(self, user_id: int, week_key: str, stale_after: int = 3600) -> bool:
+        """Claim one user's weekly Wrapped attempt without creating duplicates."""
+        with self.connection:
+            cur = self.connection.execute(
+                """
+                INSERT INTO weekly_wrapped_sends(user_id, week_key, status, reason, updated_at)
+                VALUES (?, ?, 'processing', '', strftime('%s','now'))
+                ON CONFLICT(user_id, week_key) DO UPDATE SET
+                    status='processing',
+                    reason='',
+                    sent_at=NULL,
+                    updated_at=strftime('%s','now')
+                WHERE weekly_wrapped_sends.status <> 'sent'
+                  AND (
+                    weekly_wrapped_sends.status <> 'processing'
+                    OR weekly_wrapped_sends.updated_at < strftime('%s','now') - ?
+                  )
+                """,
+                (user_id, week_key, stale_after)
+            )
+            return cur.rowcount == 1
+
+    def set_weekly_wrapped_status(self, user_id: int, week_key: str, status: str, reason: str = ""):
+        status = (status or "error")[:32]
+        reason = (reason or "")[:500]
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE weekly_wrapped_sends
+                SET status=?, reason=?, sent_at=CASE WHEN ?='sent' THEN strftime('%s','now') ELSE NULL END,
+                    updated_at=strftime('%s','now')
+                WHERE user_id=? AND week_key=?
+                """,
+                (status, reason, status, user_id, week_key)
+            )
+
+    def get_weekly_wrapped_logs(self, limit: int = 50, week_key: str | None = None):
+        query = """
+            SELECT user_id, week_key, status, reason, sent_at, updated_at
+            FROM weekly_wrapped_sends
+        """
+        params = []
+        if week_key:
+            query += " WHERE week_key=?"
+            params.append(week_key)
+        query += " ORDER BY updated_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 200)))
+        with self.connection:
+            rows = self.connection.execute(query, params).fetchall()
+        return [
+            {
+                "user_id": int(row[0]),
+                "week_key": row[1],
+                "status": row[2],
+                "reason": row[3] or "",
+                "sent_at": int(row[4]) if row[4] else None,
+                "updated_at": int(row[5]) if row[5] else None,
             }
             for row in rows
         ]
@@ -1103,6 +1177,17 @@ class DataBase:
         with self.connection:
             return self.connection.execute(
                 "SELECT user_id FROM users WHERE blocked=0"
+            ).fetchall()
+
+    def get_users_with_credentials(self):
+        with self.connection:
+            return self.connection.execute(
+                """
+                SELECT u.user_id, c.login, c.password
+                FROM users u
+                JOIN creds c ON c.user_id=u.user_id
+                WHERE u.blocked=0 AND c.login IS NOT NULL AND c.password IS NOT NULL
+                """
             ).fetchall()
 
     def get_non_logged_users(self):

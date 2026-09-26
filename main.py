@@ -7,7 +7,7 @@ from middlewares import ChannelSubscriptionMiddleware, MetricsMiddleware
 from services.background import (
     check_lessons, check_grades, check_homework, memory_cleaner_task,
     daily_backup_task, vip_expiry_task, morning_digest_task,
-    partner_vip_task,
+    partner_vip_task, weekly_wrapped_task,
 )
 
 # Налаштування логування
@@ -67,6 +67,7 @@ async def main():
     asyncio.create_task(supervised("daily_backup", daily_backup_task))
     asyncio.create_task(supervised("vip_expiry", vip_expiry_task))
     asyncio.create_task(supervised("partner_vip", partner_vip_task))
+    asyncio.create_task(supervised("weekly_wrapped", weekly_wrapped_task))
 
     # Запуск бота
     await bot.delete_webhook(drop_pending_updates=False)

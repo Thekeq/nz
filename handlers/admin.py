@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import time
+from html import escape
 
 from aiogram.fsm.context import FSMContext
 from quickchart import QuickChart
@@ -18,6 +19,7 @@ from keyboards import build_vip_kb, build_main_kb, broadcast_confirmation_kb
 from states import BroadcastStates
 from utils import safe_send
 from services.finder import getsession, getinfo
+from services.background import weekly_wrapped_week_key
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -31,6 +33,7 @@ async def admin_help(message: Message):
         return
 
     text = (
+        "• <code>/log</code> — журнал тижневих Wrapped (відправки, пропуски та помилки).\n\n"
         "👮‍♂️ <b>Адмін панель</b>\n\n"
 
         "<b>📊 Аналітика та Графіки:</b>\n"
@@ -57,6 +60,55 @@ async def admin_help(message: Message):
         "<i>Натисни на команду, щоб скопіювати її в буфер.</i>"
     )
     await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("log"))
+async def weekly_wrapped_log(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    current_week = weekly_wrapped_week_key()
+    logs = db.get_weekly_wrapped_logs(limit=50, week_key=current_week) if current_week else []
+    if not current_week:
+        logs = db.get_weekly_wrapped_logs(limit=50)
+
+    if not logs:
+        if current_week:
+            await message.answer(f"🧾 За тиждень від {current_week} записів Wrapped ще немає.")
+        else:
+            await message.answer("🧾 Журнал Wrapped ще порожній.")
+        return
+
+    counts = {"sent": 0, "no_grades": 0, "error": 0, "processing": 0}
+    for item in logs:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+
+    scope = f"тиждень від {current_week}" if current_week else "останні записи"
+    lines = [
+        f"🧾 <b>Журнал тижневих Wrapped</b> ({scope})",
+        f"✅ Надіслано: <b>{counts.get('sent', 0)}</b>",
+        f"⏭ Без оцінок: <b>{counts.get('no_grades', 0)}</b>",
+        f"❌ Помилки: <b>{counts.get('error', 0)}</b>",
+        "",
+        "<b>Останні записи:</b>",
+    ]
+    status_labels = {
+        "sent": "✅",
+        "no_grades": "⏭",
+        "error": "❌",
+        "processing": "⏳",
+    }
+    for item in logs[:30]:
+        timestamp = item.get("updated_at")
+        when = datetime.datetime.fromtimestamp(timestamp).strftime("%d.%m %H:%M") if timestamp else "—"
+        reason = escape(item["reason"].replace("\n", " ")) if item["reason"] else ""
+        suffix = f" — {reason[:100]}" if reason else ""
+        lines.append(
+            f"{status_labels.get(item['status'], '❔')} <code>{item['user_id']}</code> "
+            f"{item['week_key']} · {when}{suffix}"
+        )
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 TIKTOK_MODE = False

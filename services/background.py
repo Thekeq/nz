@@ -7,16 +7,18 @@ import re
 import logging
 from html import escape
 import requests
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
     USER_LAST_CALL, KYIV_TZ, fernet,
     COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, BOT_USERNAME
 )
 from services.diarynz import (cleanup_session_cache, clear_grade_statement_cache,
-    get_diary_schedule, get_grade_events, get_diary_homework, get_homework_events
+    get_diary_schedule, get_grade_events, get_diary_homework, get_homework_events,
+    get_diary_grades
 )
 from services.digest import has_lessons, has_conf_link, build_digest_text, is_school_time
 from utils import safe_send, REF_REWARD_INVITES
+from services.drawer import draw_wrapped
 import gc
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,18 @@ IDLE_SLEEP_SEC = 5 * 60
 
 BACKUP_DIR = "backups"
 BACKUP_KEEP = 7
+WEEKLY_WRAPPED_POLL_SEC = 3600
+
+
+def weekly_wrapped_week_key(now: datetime.datetime | None = None) -> str | None:
+    """Return the Friday key for the current Wrapped delivery window."""
+    now = now or datetime.datetime.now(KYIV_TZ)
+    if now.weekday() not in (4, 5, 6):
+        return None
+    if now.weekday() == 4 and now.hour < 18:
+        return None
+    friday = now.date() - datetime.timedelta(days=(now.weekday() - 4) % 7)
+    return friday.isoformat()
 
 
 async def sleep_to_next_minute():
@@ -218,6 +232,86 @@ async def memory_cleaner_task():
         # 5. Примусовий збір сміття — прибирає «висячі» об'єкти
         # картинок і буферів, важливо на VPS з малим обсягом RAM
         gc.collect()
+
+
+async def _send_weekly_wrapped(user_id: int, login: str, enc_password: str, week_key: str):
+    if not db.try_claim_weekly_wrapped(user_id, week_key):
+        return
+
+    photo_bio = None
+    try:
+        password = fernet.decrypt(enc_password.encode()).decode()
+        now = datetime.datetime.now(KYIV_TZ)
+        days_back = now.weekday() + 1
+
+        async with SEMAPHORE:
+            grades, text = await asyncio.to_thread(
+                get_diary_grades,
+                login,
+                password,
+                days_back,
+                user_id=user_id,
+                db=db,
+                fernet=fernet,
+            )
+
+        values = [value for value in grades.values() if isinstance(value, (int, float))]
+        counts = re.findall(r'\((\d+)\s+оцінок\)', text or "")
+        total = sum(map(int, counts)) if counts else len(values)
+
+        if not values or total <= 0:
+            if re.search(r"помил|не вдалося|csrf|токен", text or "", re.IGNORECASE):
+                db.set_weekly_wrapped_status(user_id, week_key, "error", (text or "Помилка отримання оцінок").strip())
+            else:
+                db.set_weekly_wrapped_status(user_id, week_key, "no_grades", "За останній тиждень оцінок немає")
+            return
+
+        filtered = {key: value for key, value in grades.items() if isinstance(value, (int, float))}
+        avg = round(sum(values) / len(values), 1)
+        top_subject = max(filtered.items(), key=lambda item: item[1])[0] if filtered else "Тиша..."
+
+        photo_bio = await asyncio.to_thread(
+            draw_wrapped,
+            username="Учень",
+            avg_grade=avg,
+            lessons_count=total,
+            top_subject=top_subject,
+            is_vip=False,
+            style_name="default",
+        )
+        photo = BufferedInputFile(photo_bio.read(), filename="weekly_wrapped.png")
+        sent = await safe_send(
+            user_id,
+            "📊 <b>Твій тижневий NZ Wrapped!</b>\n"
+            f"Оцінок отримано: <b>{total}</b>\n"
+            f"Середній бал: <b>{avg:.1f}</b>",
+            photo=photo,
+            parse_mode="HTML",
+        )
+        if sent:
+            db.set_weekly_wrapped_status(user_id, week_key, "sent", "")
+        else:
+            db.set_weekly_wrapped_status(user_id, week_key, "error", "Telegram не прийняв повідомлення")
+    except Exception as exc:
+        logger.exception("Weekly Wrapped failed for user_id=%s", user_id)
+        db.set_weekly_wrapped_status(user_id, week_key, "error", str(exc))
+    finally:
+        if photo_bio is not None:
+            photo_bio.close()
+
+
+async def weekly_wrapped_task():
+    """Send each logged-in user one weekly Wrapped from Friday 18:00 through Sunday."""
+    while True:
+        week_key = weekly_wrapped_week_key()
+        if week_key:
+            tasks = [
+                _send_weekly_wrapped(user_id, login, enc_password, week_key)
+                for user_id, login, enc_password in db.get_users_with_credentials()
+            ]
+            if tasks:
+                await asyncio.gather(*tasks)
+        await asyncio.sleep(WEEKLY_WRAPPED_POLL_SEC)
 
 
 async def _fetch_digest_parts(user_id: int, login: str, enc_password: str):

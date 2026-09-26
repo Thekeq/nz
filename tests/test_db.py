@@ -77,6 +77,23 @@ class DataBaseTests(unittest.TestCase):
         self.assertEqual(diary["avg_ms"], 200)
         self.assertEqual(diary["max_ms"], 300)
 
+    def test_weekly_wrapped_claim_is_one_shot_after_success(self):
+        self.db.ensure_user(1)
+
+        self.assertTrue(self.db.try_claim_weekly_wrapped(1, "2026-09-25"))
+        self.db.set_weekly_wrapped_status(1, "2026-09-25", "sent")
+
+        self.assertFalse(self.db.try_claim_weekly_wrapped(1, "2026-09-25"))
+        self.assertEqual(self.db.get_weekly_wrapped_logs()[0]["status"], "sent")
+
+    def test_weekly_wrapped_can_retry_after_no_grades(self):
+        self.db.ensure_user(1)
+
+        self.assertTrue(self.db.try_claim_weekly_wrapped(1, "2026-09-25"))
+        self.db.set_weekly_wrapped_status(1, "2026-09-25", "no_grades", "empty")
+
+        self.assertTrue(self.db.try_claim_weekly_wrapped(1, "2026-09-25"))
+
     def test_nz_session_metrics_count_events(self):
         self.db.record_nz_session_event("cookie_reuse")
         self.db.record_nz_session_event("cookie_reuse")
