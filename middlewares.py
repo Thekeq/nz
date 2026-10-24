@@ -10,6 +10,20 @@ from loader import CHANNEL_ID, CHANNEL_URL, bot
 logger = logging.getLogger(__name__)
 
 
+def bypasses_channel_gate(event) -> bool:
+    """Повідомлення, які гейт підписки пропускає без перевірки.
+
+    successful_payment — гроші вже списані, VIP треба видати за будь-яких умов.
+    /start — несе реферальний payload (/start 12345); якщо його зрізати,
+    реферала не записано, і після підписки payload уже втрачено.
+    Далі будь-яка дія все одно впирається в гейт, тож підписка обов'язкова,
+    як і раніше, — просто вітання й реферал відпрацьовують до неї.
+    """
+    if getattr(event, "successful_payment", None) is not None:
+        return True
+    return (getattr(event, "text", None) or "").startswith("/start")
+
+
 def is_active_channel_member(member) -> bool:
     """Return whether a Telegram chat member still belongs to the channel."""
     if member.status in {"member", "administrator", "creator"}:
@@ -36,6 +50,9 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
         # This callback is the only action available before subscription:
         # it performs the membership check and unlocks the bot afterwards.
         if isinstance(event, CallbackQuery) and event.data == "check_sub":
+            return await handler(event, data)
+
+        if isinstance(event, Message) and bypasses_channel_gate(event):
             return await handler(event, data)
 
         user = event.from_user
