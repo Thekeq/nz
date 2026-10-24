@@ -79,12 +79,15 @@ async def process_password(message: Message, state: FSMContext):
                 db.set_tokens(user_id, max(db.get_tokens(user_id), 50_000))
                 db.record_command_metric("funnel:trial", 0)
                 await message.answer(
-                    "🎁 <b>Дарую VIP на 3 дні — спробуй все:</b>\n\n"
-                    "✨ ШІ-асистент (50k токенів вже на балансі)\n"
+                    "🎁 <b>Дарую VIP на 3 дні!</b>\n\n"
+                    "✅ <b>Вже увімкнено:</b>\n"
+                    "🔔 сповіщення про нові оцінки — дізнаєшся раніше за всіх\n"
+                    "⏰ нагадування за 5 хв до онлайн-уроку з посиланням\n\n"
+                    "<b>Також спробуй:</b>\n"
+                    "✨ /ai — ШІ-асистент (50k токенів вже на балансі)\n"
                     "🌅 /notify_digest — ранковий дайджест о 7:30\n"
-                    "⏰ /notify — нагадування перед уроками з посиланням на мит\n"
-                    "🔔 /notify_grades — сповіщення про нові оцінки\n"
-                    "🎨 /wrapped — ексклюзивні теми звіту",
+                    "🎨 /wrapped — ексклюзивні теми звіту\n\n"
+                    "<i>Вимкнути сповіщення — /notify_grades, нагадування — /notify</i>",
                     parse_mode="HTML"
                 )
 

@@ -241,3 +241,35 @@ class FunnelMetricsTests(unittest.TestCase):
 
         top = [m["command"] for m in self.db.get_command_metrics(days=7)]
         self.assertEqual(top, ["/diary"])
+
+
+class VipEnablesNotificationsTests(unittest.TestCase):
+    """VIP без увімкнених сповіщень — порожній: юзер нічого не відчуває
+    і нічого не втрачає, коли VIP закінчується."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_new_vip_turns_on_grades_and_reminders(self):
+        self.db.set_vip(1, days=3, source="ref")
+        self.assertTrue(self.db.user_notify(1))
+        self.assertTrue(self.db.user_notify_grades(1))
+        self.assertFalse(self.db.user_notify_digest(1))  # дайджест лишається opt-in
+
+    def test_extension_keeps_user_choice(self):
+        self.db.set_vip(1, days=3)
+        self.db.toggle_notify_grades(1)                  # сам вимкнув
+        self.db.set_vip(1, days=3, source="ref")         # друг дав ще 3 дні
+        self.assertFalse(self.db.user_notify_grades(1))
+
+    def test_new_vip_after_expiry_turns_on_again(self):
+        self.db.set_vip(1, days=3)
+        self.db.remove_vip(1)
+        self.db.toggle_notify_grades(1)                  # вимкнено
+        self.db.set_vip(1, days=7)                       # купив
+        self.assertTrue(self.db.user_notify_grades(1))

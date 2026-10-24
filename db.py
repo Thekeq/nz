@@ -790,6 +790,18 @@ class DataBase:
                 (user_id, new_expires, new_source)
             )
 
+            # Новий VIP (а не продовження) одразу вмикає оцінки й нагадування.
+            # Раніше їх треба було вмикати командами, і ~80% VIP так і жили
+            # з порожнім VIP: нічого не відчули — нічого не втратили —
+            # win-back після закінчення конвертував 0 з 38.
+            # ponytail: якщо юзер колись сам вимкнув сповіщення, новий VIP
+            # увімкне їх знову; окремий прапорець «чіпав вручну», якщо заважатиме.
+            if not active:
+                self.connection.execute(
+                    "UPDATE subs SET notify=1, notify_grades=1 WHERE user_id=?",
+                    (user_id,)
+                )
+
     def get_vip_status(self, user_id: int):
         with self.connection:
             row = self.connection.execute(

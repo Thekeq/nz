@@ -73,9 +73,10 @@ async def check_channel_sub(callback: CallbackQuery):
     await callback.answer()
     await callback.message.answer(
         f"🎁 <b>+{CHANNEL_BONUS_DAYS} дні VIP за підписку!</b>\n\n"
-        "⏰ /notify — нагадування перед уроками\n"
-        "🌅 /notify_digest — ранковий дайджест\n"
-        "🔔 /notify_grades — сповіщення про оцінки",
+        "✅ <b>Вже увімкнено:</b> сповіщення про нові оцінки "
+        "і нагадування перед онлайн-уроками.\n"
+        "🌅 Ранковий дайджест — /notify_digest\n\n"
+        "<i>Вимкнути сповіщення — /notify_grades, нагадування — /notify</i>",
         parse_mode="HTML",
         reply_markup=build_vip_kb()
     )
