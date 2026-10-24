@@ -219,3 +219,25 @@ class ChannelBonusTests(unittest.TestCase):
         self.assertTrue(self.db.claim_partner_grant(1, "nz"))
         self.assertTrue(self.db.claim_partner_grant(2, "nz"))
         self.assertTrue(self.db.claim_partner_grant(1, "other"))
+
+
+class FunnelMetricsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_funnel_is_collected_and_kept_out_of_top_actions(self):
+        for _ in range(3):
+            self.db.record_command_metric("funnel:vip_menu", 0)
+        self.db.record_command_metric("funnel:invoice:week", 0)
+        self.db.record_command_metric("/diary", 120)
+
+        funnel = self.db.get_funnel_metrics(days=7)
+        self.assertEqual(funnel, {"vip_menu": 3, "invoice:week": 1})
+
+        top = [m["command"] for m in self.db.get_command_metrics(days=7)]
+        self.assertEqual(top, ["/diary"])

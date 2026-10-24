@@ -467,7 +467,7 @@ class DataBase:
                        SUM(total_ms) as total_ms,
                        MAX(max_ms) as max_ms
                 FROM command_metrics
-                WHERE day >= ?
+                WHERE day >= ? AND command NOT LIKE 'funnel:%'
                 GROUP BY command
                 ORDER BY calls DESC
                 LIMIT ?
@@ -484,6 +484,22 @@ class DataBase:
             }
             for row in rows
         ]
+
+    def get_funnel_metrics(self, days: int = 7) -> dict[str, int]:
+        """Події воронки VIP за період: {'vip_menu': 12, 'invoice:week': 3, ...}.
+        ponytail: рахує події, а не унікальних людей — хто відкрив /vip 5 разів,
+        дає 5. Окрема таблиця з user_id, якщо знадобляться унікальні."""
+        min_day = datetime.date.today().toordinal() - (days - 1)
+        with self.connection:
+            rows = self.connection.execute(
+                """
+                SELECT command, SUM(calls) FROM command_metrics
+                WHERE day >= ? AND command LIKE 'funnel:%'
+                GROUP BY command
+                """,
+                (min_day,)
+            ).fetchall()
+        return {cmd[len("funnel:"):]: int(n or 0) for cmd, n in rows}
 
     def try_claim_weekly_wrapped(self, user_id: int, week_key: str, stale_after: int = 3600) -> bool:
         """Claim one user's weekly Wrapped attempt without creating duplicates."""

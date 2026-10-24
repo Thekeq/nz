@@ -767,6 +767,39 @@ def _get_growth_chart(labels, data):
 
 # --- ОСНОВНИЙ ХЕНДЛЕР ---
 
+def _pct(part: int, whole: int) -> str:
+    return f"{round(part * 100 / whole, 1)}%" if whole else "—"
+
+
+def _funnel_text(f: dict[str, int], days: int) -> str:
+    plans = ("week", "month", "months3", "winback")
+    invoices = {p: f.get(f"invoice:{p}", 0) for p in plans}
+    paid = {p: f.get(f"paid:{p}", 0) for p in plans}
+    inv_total, paid_total = sum(invoices.values()), sum(paid.values())
+    menu = f.get("vip_menu", 0)
+
+    def split(d):
+        return f"тиждень {d['week']} · місяць {d['month']} · 3 міс {d['months3']} · winback {d['winback']}"
+
+    return (
+        f"🎯 <b>Воронка VIP</b> (за {days} днів)\n"
+        f"<i>Рахуються події, не унікальні люди.</i>\n\n"
+        f"<b>Безкоштовний VIP видано:</b>\n"
+        f"├ 🎁 тріал: {f.get('trial', 0)}\n"
+        f"└ 📣 бонус за канал: {f.get('channel_bonus', 0)}\n\n"
+        f"<b>Шлях до оплати:</b>\n"
+        f"├ 👀 відкрили /vip без VIP: {menu}\n"
+        f"├ 🧾 відкрили рахунок: {inv_total}\n"
+        f"│   {split(invoices)}\n"
+        f"├ 💌 win-back надіслано: {f.get('winback_sent', 0)}\n"
+        f"└ 💰 оплатили: {paid_total}\n"
+        f"    {split(paid)}\n\n"
+        f"<b>Конверсія:</b>\n"
+        f"├ меню → рахунок: {_pct(inv_total, menu)}\n"
+        f"└ рахунок → оплата: {_pct(paid_total, inv_total)}"
+    )
+
+
 @router.message(Command("stat"))
 async def stats(message: Message):
     if message.from_user.id != ADMIN_ID:
@@ -833,6 +866,10 @@ async def stats(message: Message):
         InputMediaPhoto(media=activity_url)
     ]
     await message.answer_media_group(media)
+
+    # окремим повідомленням: підпис до фото обмежений 1024 символами,
+    # і воронка туди вже не влазить
+    await message.answer(_funnel_text(db.get_funnel_metrics(days=days), days), parse_mode="HTML")
 
 
 # --- NaurokFinder: особиста фіча, ТІЛЬКИ для адміна ---
