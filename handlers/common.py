@@ -9,12 +9,45 @@ import texts
 from loader import db, bot, ADMIN_ID
 from keyboards import build_vip_kb, build_main_kb
 from states import SupportStates, AuthStates  # Якщо треба
-from utils import track_activity, user_can_call, safe_send, answer_long
+from utils import track_activity, user_can_call, safe_send, answer_rich
 from services.ai import GEMINI_MODEL
+from services import rich
 
 router = Router()
 logger = logging.getLogger(__name__)
 POLICY_NOTE = "\n\n<i>Використовуючи бот, ви погоджуєтеся з /policy.</i>"
+
+WELCOME_RICH = (
+    "<h2>🎓 Шкільний помічник</h2>"
+    "<p>Твій щоденник <b>Нові Знання (NZ.ua)</b> — прямо в Telegram:</p>"
+    "<ul>"
+    "<li>📅 розклад з посиланнями на онлайн-уроки</li>"
+    "<li>📕 домашнє завдання і порада ШІ</li>"
+    "<li>📊 оцінки, середній бал і прогноз</li>"
+    "<li>⏰ нагадування за 5 хв до уроку</li>"
+    "</ul>"
+    "<p>Глянь приклад або одразу входь у щоденник 👇</p>"
+    "<footer>Використовуючи бот, ви погоджуєтеся з /policy</footer>"
+)
+
+# Приклад розкладу будується тим самим рендером, що й справжній:
+# людина бачить рівно те, що отримає після входу
+_MEET = "https://meet.google.com/"
+DEMO_SCHEDULE = {
+    "Сьогодні": [
+        {"subject": "——", "time": "08:30 - 09:15", "meet": None},
+        {"subject": "Українська мова", "time": "09:25 - 10:10", "meet": _MEET + "aaa-bbbb-ccc"},
+        {"subject": "Фізика", "time": "10:30 - 11:15", "meet": _MEET + "ddd-eeee-fff"},
+        {"subject": "Інформатика", "time": "11:35 - 12:20", "meet": _MEET + "ggg-hhhh-iii"},
+        {"subject": "Фізична культура", "time": "12:30 - 13:15", "meet": None},
+    ],
+    "Завтра": [
+        {"subject": "Історія України", "time": "08:30 - 09:15", "meet": _MEET + "mmm-nnnn-ooo"},
+        {"subject": "Геометрія", "time": "09:25 - 10:10", "meet": _MEET + "xxx-yyyy-zzz"},
+        {"subject": "Хімія", "time": "10:30 - 11:15", "meet": None},
+        {"subject": "Мистецтво", "time": "11:35 - 12:20", "meet": _MEET + "sss-tttt-uuu"},
+    ],
+}
 
 
 @router.message(CommandStart())
@@ -79,14 +112,14 @@ async def start(message: Message, state: FSMContext):
             )
     else:
         if message.chat.type == "private":
-            await message.answer(welcome_text, parse_mode="HTML",
-                                 reply_markup=ReplyKeyboardMarkup(
-                                     keyboard=[
-                                         [KeyboardButton(text=texts.BTN_EXAMPLE)],
-                                         [KeyboardButton(text=texts.BTN_LOGIN)],
-                                     ],
-                                     resize_keyboard=True
-                                 ))
+            await answer_rich(message, WELCOME_RICH, welcome_text, parse_mode="HTML",
+                              reply_markup=ReplyKeyboardMarkup(
+                                  keyboard=[
+                                      [KeyboardButton(text=texts.BTN_EXAMPLE)],
+                                      [KeyboardButton(text=texts.BTN_LOGIN)],
+                                  ],
+                                  resize_keyboard=True
+                              ))
         else:
             await message.answer(welcome_text, parse_mode="HTML")
             await message.reply(
@@ -121,6 +154,7 @@ async def help_cmd(message: Message):
 
         "⚙️ <b>Акаунт</b>\n"
         "/vip — статус, тарифи, бонуси\n"
+        "/parents — підключити батьків до оцінок\n"
         "/support — підтримка\n"
         "/policy — правила\n"
         "/logout — вихід\n\n"
@@ -130,7 +164,7 @@ async def help_cmd(message: Message):
     if not is_vip:
         text += "\n<i>Отримати VIP безкоштовно за друга — /vip</i>"
 
-    await message.answer(text, parse_mode="HTML")
+    await answer_rich(message, rich.help_page(is_vip), text, parse_mode="HTML")
 
 
 @router.message(Command('policy'))
@@ -138,7 +172,7 @@ async def help_cmd(message: Message):
 async def policy(message: Message):
     policy_text = (
         "🔐 <b>Політика конфіденційності та умови використання</b>\n"
-        "<i>Оновлено: 16.09.2026</i>\n\n"
+        "<i>Оновлено: 19.11.2026</i>\n\n"
 
         "<b>1. Загальні положення</b>\n"
         "Цей Telegram-бот (далі — «Сервіс») є неофіційним інструментом для зручного "
@@ -159,6 +193,8 @@ async def policy(message: Message):
         "• VIP-статус, термін дії, спосіб отримання (оплата / реферал), баланс ШІ-токенів\n"
         "• Кількість дій по днях і час виконання команд — для статистики та діагностики\n"
         "• Реферальні звʼязки (хто кого запросив)\n"
+        "• Звʼязки з батьками (/parents): хто підключений до ваших оцінок, "
+        "та імена обох сторін у Telegram\n"
         "• Тимчасовий стан діалогу (наприклад, крок авторизації) — щоб бот не «губив» "
         "вас після перезапуску\n\n"
 
@@ -172,11 +208,12 @@ async def policy(message: Message):
         "<b>5. Для чого використовуються дані</b>\n"
         "• вхід у ваш щоденник і отримання розкладу, ДЗ, оцінок, новин\n"
         "• надсилання сповіщень і ранкового дайджесту (за вашим бажанням)\n"
+        "• надсилання ваших нових оцінок батькам, яких <b>ви самі</b> підключили через /parents\n"
         "• робота ШІ-асистента\n"
         "• VIP-функції, оплата, реферальна програма, розіграші\n"
         "• внутрішня аналітика та пошук помилок\n"
         "Дані <b>не продаються</b> і не передаються третім особам, крім сервісів, "
-        "перелічених у пункті 6.\n\n"
+        "перелічених у пункті 6, і батьків, яких ви підключили самі.\n\n"
 
         "<b>6. Передача даних третім сервісам</b>\n"
         "Для окремих функцій частина даних передається зовнішнім сервісам:\n"
@@ -196,13 +233,13 @@ async def policy(message: Message):
         "/notify_grades (нові оцінки), /notify_homework (нове ДЗ). "
         "Ранковий дайджест вмикається окремо командою /notify_digest (за замовчуванням вимкнений): VIP — щодня, решта — по понеділках. "
         "Сервіс може надсилати рідкі службові та інформаційні повідомлення "
-        "(зміни в роботі, розіграші). Сторонньої рекламы немає.\n"
+        "(зміни в роботі, розіграші). Сторонньої реклами немає.\n"
         "Якщо ви заблокуєте бота, розсилки автоматично вимикаються.\n\n"
 
         "<b>8. VIP, оплата та повернення</b>\n"
         "VIP можна отримати: оплатою Telegram Stars, переказом на Monobank-банку "
         "(з вашим ID у коментарі), безкоштовним пробним періодом (3 дні, один раз) "
-        "або за реферальну програму. "
+        "або за реферальну програму. Оплатити VIP за дитину можуть підключені батьки. "
         "Сервіс <b>не зберігає платіжних даних</b> — оплату повністю обробляє Telegram.\n"
         "Кошти за Telegram Stars повертаються за правилами Telegram. "
         "Оплата не гарантує безперебійної роботи, якщо NZ.ua недоступний.\n\n"
@@ -213,39 +250,52 @@ async def policy(message: Message):
         "теми звіту. Накрутка фейковими акаунтами веде до скасування бонусів "
         "та обмеження доступу.\n\n"
 
-        "<b>10. Штучний інтелект</b>\n"
+        "<b>10. Батьківський режим</b>\n"
+        "Через /parents ви можете підключити батьків: вони отримуватимуть ваші нові оцінки "
+        "(назва предмета й оцінка) і повідомлення про закінчення VIP. Логін, пароль, ДЗ "
+        "та інші дані їм не передаються. Посилання для підключення одноразове і діє 7 днів. "
+        "Відключити батьків можна будь-коли в /parents, а батьки можуть відписатися самі.\n\n"
+
+        "<b>11. Штучний інтелект</b>\n"
         "ШІ може помилятися або вигадувати (галюцинувати). Його відповіді — "
         "довідкові, їх треба перевіряти. Не покладайтесь на ШІ у важливих "
         "навчальних рішеннях. ШІ-функції обмежені токенами: у VIP — 1 000 000, "
         "без VIP — кілька безкоштовних запитів на тиждень.\n\n"
 
-        "<b>11. Обмеження відповідальності</b>\n"
+        "<b>12. Обмеження відповідальності</b>\n"
         "Сервіс надається «як є». Розробник не відповідає за: зміни чи збої NZ.ua, "
         "тимчасову недоступність бота, помилки ШІ, неточності або "
         "затримки в даних (зокрема пропущені нагадування, якщо вчитель додав "
         "посилання надто пізно).\n\n"
 
-        "<b>12. Ваші права та видалення даних</b>\n"
+        "<b>13. Ваші права та видалення даних</b>\n"
         "• /logout — видаляє логін, пароль і сесійні cookie (VIP залишається)\n"
         "• /support — можна попросити повне видалення всіх даних, включно з "
         "активністю та реферальними звʼязками\n"
         "Дані активності зберігаються, поки ви користуєтесь ботом; "
         "резервні копії — до 7 днів.\n\n"
 
-        "<b>13. Вік користувачів</b>\n"
+        "<b>14. Вік користувачів</b>\n"
         "Сервіс призначений для школярів. Якщо вам менше 14 років, "
         "використовуйте його з дозволу батьків або опікунів.\n\n"
 
-        "<b>14. Зміни політики</b>\n"
+        "<b>15. Зміни політики</b>\n"
         "Політика може оновлюватися. Актуальна версія завжди доступна за /policy. "
         "Про суттєві зміни розробник повідомить у боті.\n\n"
 
-        "<b>15. Підтримка</b>\n"
+        "<b>16. Підтримка</b>\n"
         "З усіх питань — /support."
     )
 
-    # політика довша за ліміт Telegram — шлемо частинами
-    await answer_long(message, policy_text, parse_mode="HTML")
+    # rich: розділи згорнуті, все одним повідомленням. Звичайний HTML довший
+    # за ліміт Telegram — тоді шлемо частинами
+    head, *sections = policy_text.split("\n\n")
+    updated = head.partition("\n")[2]
+    await answer_rich(
+        message,
+        rich.sections("🔐 Політика конфіденційності та умови", sections, footer=updated),
+        policy_text, parse_mode="HTML",
+    )
 
 
 @router.message(Command('support'))
@@ -294,7 +344,8 @@ async def example_text(message: Message):
         ]
     )
 
-    await message.reply(
+    await answer_rich(
+        message, rich.schedule(DEMO_SCHEDULE),
         "📅 <b>Сьогодні</b>\n"
         "1️⃣ ——\n"
         "2️⃣ Українська мова: https://meet.google.com/aaa-bbb-ccc\n"

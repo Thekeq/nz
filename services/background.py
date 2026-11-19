@@ -6,11 +6,9 @@ import time
 import re
 import logging
 from html import escape
-import requests
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from loader import (db, SEMAPHORE, SENT_REMINDERS, WRAPPED_CACHE, HW_AI_CACHE,
-    USER_LAST_CALL, KYIV_TZ, fernet,
-    COOKIE_API_URL, COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, BOT_USERNAME
+    USER_LAST_CALL, KYIV_TZ, fernet, BOT_USERNAME
 )
 from services.diarynz import (cleanup_session_cache, clear_grade_statement_cache,
     get_diary_schedule, get_grade_events, get_diary_homework, get_homework_events,
@@ -143,8 +141,8 @@ async def _check_lessons_nz(user_id: int, login: str, enc_password: str):
 
 async def check_grades():
     while True:
-        users = db.get_users_with_grades_notify()  # (user_id, login, enc_password)
-        for user_id, login, enc_password in users:
+        users = db.get_users_with_grades_notify()  # (user_id, login, enc_password, notify_self)
+        for user_id, login, enc_password, notify_self in users:
             try:
                 vip_flag, expires = db.get_vip_status(user_id)
                 now_ts = int(time.time())
@@ -182,11 +180,21 @@ async def check_grades():
                     lines = ["🆕 <b>Нові оцінки:</b>"]
                     sent = new_events[:10]
                     for ev in sent:
-                        lines.append(f"• <b>{ev['name']}</b>:\n{ev['text']}")
+                        lines.append(f"• <b>{escape(ev['name'])}</b>:\n{escape(ev['text'])}")
 
+                    delivered = False
+                    if notify_self:
+                        delivered = await safe_send(user_id, "\n\n".join(lines), disable_web_page_preview=True)
+                    for parent_id, _, child_name in db.get_parents(user_id):
+                        delivered |= await safe_send(
+                            parent_id,
+                            f"🆕 <b>Нові оцінки — {escape(child_name or 'дитина')}:</b>\n\n"
+                            + "\n\n".join(lines[1:]),
+                            disable_web_page_preview=True,
+                        )
                     # хеши фиксируем только после успешной отправки:
                     # если Telegram не принял — попробуем в следующем цикле
-                    if await safe_send(user_id, "\n\n".join(lines), disable_web_page_preview=True):
+                    if delivered:
                         db.set_last_grade_hashes(user_id, [e["hash"] for e in events[:3]])
                     await asyncio.sleep(0.25)
 
@@ -463,7 +471,8 @@ async def vip_expiry_task():
     while True:
         try:
             winback_kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔥 Продовжити за 50 ⭐️ (-33%)", callback_data="buy_winback")]
+                [InlineKeyboardButton(text="🔥 Продовжити за 50 ⭐️ (-33%)", callback_data="buy_winback")],
+                [InlineKeyboardButton(text="👨‍👩‍👧 Попросити батьків", callback_data="pa:menu")],
             ])
 
             for user_id, expires in db.get_vips_expiring_within(VIP_EXPIRY_NOTICE_SEC):
@@ -482,72 +491,34 @@ async def vip_expiry_task():
                 await asyncio.sleep(0.25)
 
             for user_id, expires in db.get_vips_just_expired(WINBACK_GRACE_SEC):
-                if await safe_send(user_id,
+                delivered = await safe_send(user_id,
                     "😔 <b>VIP закінчився</b> — нагадування і сповіщення вимкнено.\n\n"
                     "🎁 Тільки <b>48 годин</b>: місяць VIP за <b>50 ⭐️ замість 75</b>\n\n"
                     f"Або запроси <b>{REF_REWARD_INVITES}</b> друга за своїм посиланням "
                     "і продовж VIP безкоштовно!\n"
                     f"https://t.me/{BOT_USERNAME}?start={user_id}",
                     parse_mode="HTML", reply_markup=winback_kb
-                ):
-                    db.set_expiry_stage(user_id, 2)
+                )
+                if delivered:
                     db.record_command_metric("funnel:winback_sent", 0)
+                # батьки — ті, хто справді може заплатити
+                from handlers.parents import parent_kb  # lazy: handlers імпортують services
+                for parent_id, _, child_name in db.get_parents(user_id):
+                    if await safe_send(parent_id,
+                        f"⏸ <b>Сповіщення про оцінки {escape(child_name or 'дитини')} на паузі</b> — "
+                        "VIP закінчився.\n\nПродовжити можна кнопками нижче:",
+                        parse_mode="HTML", reply_markup=parent_kb(user_id, active=False)
+                    ):
+                        delivered = True
+                        db.record_command_metric("funnel:parent_winback_sent", 0)
+                    await asyncio.sleep(0.25)
+                if delivered:
+                    db.set_expiry_stage(user_id, 2)
                 await asyncio.sleep(0.25)
         except Exception:
             logger.exception("VIP expiry check failed")
 
         await asyncio.sleep(3600)
-
-
-COOKIE_POLL_SEC = 10 * 60
-
-
-def _cookie_source_users() -> list[int]:
-    """Хто зареєструвався у Cookie Merge за нашим посиланням. Синхронно —
-    викликається через to_thread, як і решта мережевих походів тут."""
-    resp = requests.get(
-        f"{COOKIE_API_URL}/internal/source/{COOKIE_SOURCE}",
-        headers={"Authorization": f"Bearer {COOKIE_API_TOKEN}"},
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return [int(u) for u in resp.json().get("users", [])]
-
-
-async def partner_vip_task():
-    """Тиждень VIP тим, хто пішов у Cookie Merge за нашим посиланням.
-
-    Гра віддає ВЕСЬ список своїх реєстрацій із міткою src_nz, а хто вже
-    отримав нагороду — пам'ятаємо ми: платить рівно вставка в partner_grants.
-    Тому опитування безпечно повторювати, а задача, що впала посеред видачі,
-    доплатить решту наступним проходом.
-
-    VIP видаємо навіть тому, кого бот ще не бачив: set_vip заводить рядок
-    сам, і якщо людина натисне /start пізніше — підписка вже чекає. Тому
-    невдала відправка повідомлення нагороду не скасовує."""
-    if not COOKIE_API_TOKEN:
-        logger.info("Cookie partner sync off: PARTNER_TOKEN not set")
-        return
-    while True:
-        try:
-            for user_id in await asyncio.to_thread(_cookie_source_users):
-                if not db.claim_partner_grant(user_id, COOKIE_SOURCE):
-                    continue
-                db.set_vip(user_id, days=COOKIE_VIP_DAYS, source="partner")
-                db.record_command_metric("partner:cookie_vip", 0)
-                await safe_send(user_id,
-                    f"🎁 <b>{COOKIE_VIP_DAYS} днів VIP — за Cookie Merge!</b>\n\n"
-                    "Ти зайшов у гру за нашим посиланням, і VIP уже активний:\n"
-                    "⏰ нагадування перед уроками\n"
-                    "🔔 сповіщення про оцінки\n"
-                    "📬 ранковий дайджест\n\n"
-                    "Термін і статус: /vip", parse_mode="HTML"
-                )
-                await asyncio.sleep(0.25)
-        except Exception:
-            logger.exception("Cookie partner sync failed")
-
-        await asyncio.sleep(COOKIE_POLL_SEC)
 
 
 async def daily_backup_task():

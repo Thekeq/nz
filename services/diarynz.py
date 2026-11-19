@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 import datetime
 
 from services.digest import homework_hash, NO_HOMEWORK
+from services import rich
 
 logger = logging.getLogger(__name__)
 _SESSION_LOCKS: dict[int, threading.RLock] = {}
@@ -331,9 +332,9 @@ def _is_login_page(soup: BeautifulSoup) -> bool:
     return bool(
         soup.find("input", {"name": "_csrf"})
         and (
-            soup.find("input", {"name": "LoginForm[login]"})
-            or soup.find("input", {"name": "LoginForm[password]"})
-            or soup.find("form", id="login-form")
+                soup.find("input", {"name": "LoginForm[login]"})
+                or soup.find("input", {"name": "LoginForm[password]"})
+                or soup.find("form", id="login-form")
         )
     )
 
@@ -486,15 +487,15 @@ def _open_authorized_page(
 
 @_dedupe_call
 @_with_user_session_lock
-def get_diary_schedule(
+def get_schedule_data(
         login: str,
         password: str,
         days: list[str] | None = None,
-        is_tiktok_mode: bool = False,
         user_id: int | None = None,
         db=None,
         fernet=None,
-) -> str:
+) -> dict[str, list[dict]] | None:
+    """{«Сьогодні — 19 листопада»: [{subject, time, meet}, ...]}; None — сайт не віддав CSRF."""
     scraper, cached_scraper = _get_scraper(user_id)
     _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
@@ -504,7 +505,7 @@ def get_diary_schedule(
 
         soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
         if soup is None:
-            return "Не удалось получить CSRF токен."
+            return None
 
         diary_items = soup.select(".diary-item")
         if days is None:
@@ -589,51 +590,67 @@ def get_diary_schedule(
                                 "subject": subject, "time": time, "meet": meet_link
                             })
 
-        # --- ФОРМУВАННЯ ТЕКСТУ (З TIKTOK MODE) ---
-        output = ""
-        for day_header, lessons in schedule_by_day.items():
-            output += f"📅 <b>{day_header}</b>\n"
-
-            last_index = 0
-            for idx, lesson in enumerate(lessons, start=1):
-                if lesson["subject"] != "——":
-                    last_index = idx
-            visible_lessons = lessons[:last_index]
-            if not visible_lessons: output += "<i>Уроків немає</i>\n"
-
-            for i, lesson in enumerate(visible_lessons, start=1):
-                output += f"{i}. "
-                if lesson["time"]: output += f"<i>{lesson['time']}</i> "
-
-                subject = html.escape(lesson["subject"])
-                link = lesson['meet']
-
-                if link and is_tiktok_mode:
-                    # 🔥🔥🔥 TIKTOK LOGIC 🔥🔥🔥
-                    # тут посилання лишається текстом: сенс режиму — показати
-                    # його на екрані, але приховати хвіст під спойлером
-                    output += subject
-                    if len(link) > 15:
-                        output += f": {link[:-8]}<tg-spoiler>{link[-8:]}</tg-spoiler>"
-                    else:
-                        output += f": <tg-spoiler>{link}</tg-spoiler>"
-                elif link:
-                    # предмет-посилання замість «голого» URL: рядок стає
-                    # вдвічі коротшим і повідомлення не розпливається
-                    output += f'<a href="{html.escape(link, quote=True)}">{subject}</a> 🔗'
-                else:
-                    output += subject
-                    if lesson['subject'] != "——":
-                        output += ": —"
-                output += "\n"
-            output += "\n"
-
-        if not output: return "Розклад не знайдено."
-        return output
+        return schedule_by_day
     except Exception as e:
         raise e
     finally:
         _release_scraper(user_id, scraper, keep=user_id is not None)
+
+
+def format_schedule(schedule_by_day: dict[str, list[dict]] | None, is_tiktok_mode: bool = False) -> str:
+    """Звичайний HTML-текст розкладу (сповіщення, дайджест, запасний варіант)."""
+    if schedule_by_day is None:
+        return "Не вдалося отримати CSRF токен."
+    output = ""
+    for day_header, lessons in schedule_by_day.items():
+        output += f"📅 <b>{day_header}</b>\n"
+
+        visible_lessons = rich.visible_lessons(lessons)
+        if not visible_lessons: output += "<i>Уроків немає</i>\n"
+
+        for i, lesson in enumerate(visible_lessons, start=1):
+            output += f"{i}. "
+            if lesson["time"]: output += f"<i>{lesson['time']}</i> "
+
+            subject = html.escape(lesson["subject"])
+            link = lesson['meet']
+
+            if link and is_tiktok_mode:
+                # 🔥🔥🔥 TIKTOK LOGIC 🔥🔥🔥
+                # тут посилання лишається текстом: сенс режиму — показати
+                # його на екрані, але приховати хвіст під спойлером
+                output += subject
+                if len(link) > 15:
+                    output += f": {link[:-8]}<tg-spoiler>{link[-8:]}</tg-spoiler>"
+                else:
+                    output += f": <tg-spoiler>{link}</tg-spoiler>"
+            elif link:
+                # предмет-посилання замість «голого» URL: рядок стає
+                # вдвічі коротшим і повідомлення не розпливається
+                output += f'<a href="{html.escape(link, quote=True)}">{subject}</a> 🔗'
+            else:
+                output += subject
+                if lesson['subject'] != "——":
+                    output += ": —"
+            output += "\n"
+        output += "\n"
+
+
+    if not output: return "Розклад не знайдено."
+    return output
+
+
+def get_diary_schedule(
+        login: str,
+        password: str,
+        days: list[str] | None = None,
+        is_tiktok_mode: bool = False,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    data = get_schedule_data(login, password, days=days, user_id=user_id, db=db, fernet=fernet)
+    return format_schedule(data, is_tiktok_mode)
 
 
 HW_RE = re.compile(r"Д\s*/\s*[зz]\s*:\s*(.*)", re.IGNORECASE | re.DOTALL)
@@ -720,14 +737,15 @@ def _collect_homework(soup: BeautifulSoup, days: list[str]) -> dict[str, list[di
 
 @_dedupe_call
 @_with_user_session_lock
-def get_diary_homework(
+def get_homework_data(
         login: str,
         password: str,
         days: list[str] | None = None,
         user_id: int | None = None,
         db=None,
         fernet=None,
-) -> str:
+) -> dict[str, list[dict]] | None:
+    """{день: [{subject, hw, link}, ...]}; None — сайт не віддав CSRF."""
     scraper, cached_scraper = _get_scraper(user_id)
     _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
@@ -736,49 +754,70 @@ def get_diary_homework(
         )
         soup = _ensure_current_semester(scraper, soup, f"{BASE}/schedule/diary")
         if soup is None:
-            return "Не удалось получить CSRF токен."
+            return None
 
         if days is None:
             days = ["сьогодні"]
 
-        homework_by_day = _collect_homework(soup, days)
-
-        # ---- форматирование для Telegram (HTML) ----
-        if not homework_by_day:
-            return NO_HOMEWORK
-
-        out = []
-        for day, lessons in homework_by_day.items():
-            out.append(f"📅 {html.escape(day).capitalize()}")
-            for i, l in enumerate(lessons, start=1):
-                subj = html.escape(l["subject"])
-                hw = html.escape(l["hw"])
-                if l.get("link"):
-                    out.append(
-                        f'<b>{i}. <a href="{html.escape(l["link"])}">{subj}:</a></b>'
-                    )
-                else:
-                    out.append(f"<b>{i}. {subj}:</b>")
-                out.append(f"<blockquote expandable>{hw}</blockquote>")
-            out.append("")
-
-        return "\n".join(out).strip()
+        return _collect_homework(soup, days)
     except Exception as e:
         raise e
     finally:
         _release_scraper(user_id, scraper, keep=user_id is not None)
 
 
+def format_homework(homework_by_day: dict[str, list[dict]] | None) -> str:
+    """Звичайний HTML-текст ДЗ (сповіщення, дайджест, ШІ, запасний варіант)."""
+    if homework_by_day is None:
+        return "Не вдалося отримати CSRF токен."
+    if not homework_by_day:
+        return NO_HOMEWORK
+
+    out = []
+    for day, lessons in homework_by_day.items():
+        out.append(f"📅 {html.escape(day).capitalize()}")
+        for i, l in enumerate(lessons, start=1):
+            subj = html.escape(l["subject"])
+            hw = html.escape(l["hw"])
+            if l.get("link"):
+                out.append(
+                    f'<b>{i}. <a href="{html.escape(l["link"])}">{subj}:</a></b>'
+                )
+            else:
+                out.append(f"<b>{i}. {subj}:</b>")
+            out.append(f"<blockquote expandable>{hw}</blockquote>")
+        out.append("")
+
+    return "\n".join(out).strip()
+
+
+def get_diary_homework(
+        login: str,
+        password: str,
+        days: list[str] | None = None,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    data = get_homework_data(login, password, days=days, user_id=user_id, db=db, fernet=fernet)
+    return format_homework(data)
+
+
 @_dedupe_call
 @_with_user_session_lock
-def get_diary_grades(
+def get_grades_data(
         login: str,
         password: str,
         days_back: int = None,
         user_id: int | None = None,
         db=None,
         fernet=None,
-) -> tuple[dict[str, float | None], str]:
+) -> dict:
+    """Оцінки поточного навчального року.
+
+    {"year", "days_back", "subjects": {предмет: {"all": [...], "by_semester": [(назва, [...]), ...]}}}
+    або {"error": текст}, якщо сторінка не та, що чекали.
+    """
     scraper, cached_scraper = _get_scraper(user_id)
     _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
@@ -790,12 +829,12 @@ def get_diary_grades(
         )
         soup = _ensure_current_semester(scraper, soup, grades_url)
         if soup is None:
-            return {}, "Не удалось получить CSRF токен."
+            return {"error": "Не удалось получить CSRF токен."}
 
         # Ищем выпадающий список семестров
         select_box = soup.find("select", {"id": "personalselectform-semester_id"})
         if not select_box:
-            return {}, "Не удалось найти список семестров."
+            return {"error": "Не удалось найти список семестров."}
 
         # Находим текущий выбранный семестр (чтобы понять текущий год)
         selected_option = select_box.find("option", selected=True)
@@ -808,7 +847,7 @@ def get_diary_grades(
         year_match = re.search(r"(\d{4}-\d{4})", current_option_text)
 
         if not year_match:
-            return {}, "Не удалось определить текущий учебный год."
+            return {"error": "Не удалось определить текущий учебный год."}
 
         current_year_str = year_match.group(1)  # "2025-2026"
 
@@ -840,7 +879,7 @@ def get_diary_grades(
             if csrf_input:
                 semester_csrf = csrf_input["value"]
         if not semester_csrf:
-            return {}, "Не удалось получить CSRF токен."
+            return {"error": "Не удалось получить CSRF токен."}
 
         original_semester_id = _selected_semester_id(select_box)
 
@@ -887,70 +926,106 @@ def get_diary_grades(
                 except Exception:
                     logger.exception("Failed to restore NZ semester after grades fetch")
 
-        # --- 4. РАСЧЕТ ИТОГОВОГО СРЕДНЕГО ---
+        subjects = {
+            subj: {
+                "all": all_grades_data[subj],
+                "by_semester": [
+                    (label, sem_data.get(subj, [])) for label, sem_data in semester_grades_data
+                ],
+            }
+            for subj in sorted(all_grades_data)
+        }
+        return {"year": current_year_str, "days_back": days_back, "subjects": subjects}
 
-        final_averages = {}
-        summary_lines = []
-        subjects = sorted(all_grades_data.keys())
+    finally:
+        _release_scraper(user_id, scraper, keep=user_id is not None)
 
-        # Этот короткий блок сохраняем в прежнем формате: его используют
-        # график и VIP-аналитика.
-        for subj in subjects:
-            grades_list = all_grades_data[subj]
-            avg = round(sum(grades_list) / len(grades_list), 2)
-            final_averages[subj] = avg
-            summary_lines.append(
-                f"{html.escape(subj)}: {avg} ({len(grades_list)} оцінок)"
-            )
 
-        header = f"🎓 <b>Виписка оцінок за {current_year_str}</b>\n"
-        if days_back:
-            header += f"📅 За останні {days_back} днів\n"
-        header += "\n📊 <b>Середній бал за рік:</b>\n\n"
+def format_grades(data: dict) -> tuple[dict[str, float], str, list[str]]:
+    """Звичайний HTML: (середні по предметах, головна виписка, сторінки «усі оцінки»).
 
-        lines = [header, *summary_lines]
-        subject_blocks = []
-        for subj in subjects:
-            grades_list = all_grades_data[subj]
-            block = [f"📚 <b>{html.escape(subj)}</b>"]
+    Рядки «Предмет: 10.5 (4 оцінок)» у головній виписці — формат, який
+    парсять графік і VIP-аналітика (handlers/school.parse_grades_text).
+    """
+    if "error" in data:
+        return {}, data["error"], []
 
-            for semester_label, semester_data in semester_grades_data:
-                grades = semester_data.get(subj, [])
-                if not grades:
-                    continue
-                avg = round(sum(grades) / len(grades), 2)
-                block.append(
-                    f"<b>{semester_label}:</b> {_format_grade_list(grades)}"
-                )
-                block.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
-                block.append(_target_progress(grades))
+    final_averages = {}
+    summary_lines = []
+    subjects = data["subjects"]
+    days_back = data.get("days_back")
 
-            annual_avg = round(sum(grades_list) / len(grades_list), 2)
+    for subj, info in subjects.items():
+        grades_list = info["all"]
+        avg = round(sum(grades_list) / len(grades_list), 2)
+        final_averages[subj] = avg
+        summary_lines.append(
+            f"{html.escape(subj)}: {avg} ({len(grades_list)} оцінок)"
+        )
+
+    header = f"🎓 <b>Виписка оцінок за {data['year']}</b>\n"
+    if days_back:
+        header += f"📅 За останні {days_back} днів\n"
+    header += "\n📊 <b>Середній бал за рік:</b>\n\n"
+
+    lines = [header, *summary_lines]
+    subject_blocks = []
+    for subj, info in subjects.items():
+        grades_list = info["all"]
+        block = [f"📚 <b>{html.escape(subj)}</b>"]
+
+        for semester_label, grades in info["by_semester"]:
+            if not grades:
+                continue
+            avg = round(sum(grades) / len(grades), 2)
             block.append(
-                f"<b>За рік:</b> <b>{annual_avg}</b> ({len(grades_list)} оцінок)"
+                f"<b>{semester_label}:</b> {_format_grade_list(grades)}"
             )
-            subject_blocks.append("\n".join(block))
+            block.append(f"Середній: <b>{avg}</b> ({len(grades)} оцінок)")
+            block.append(_target_progress(grades))
 
-        formatted = "\n".join(lines)
-        page_count = math.ceil(len(subject_blocks) / 4)
-        pages = [
-            (
+        annual_avg = round(sum(grades_list) / len(grades_list), 2)
+        block.append(
+            f"<b>За рік:</b> <b>{annual_avg}</b> ({len(grades_list)} оцінок)"
+        )
+        subject_blocks.append("\n".join(block))
+
+    formatted = "\n".join(lines)
+    page_count = math.ceil(len(subject_blocks) / 4)
+    pages = [
+        (
                 f"🧾 <b>Усі оцінки по семестрах</b> · "
                 f"{index // 4 + 1}/{page_count}\n"
                 "Формат: оцінка x кількість оцінок\n\n"
                 + "\n\n".join(subject_blocks[index:index + 4])
-            )
-            for index in range(0, len(subject_blocks), 4)
-        ]
-        _GRADE_STATEMENT_CACHE[user_id] = {"main": formatted, "pages": pages}
+        )
+        for index in range(0, len(subject_blocks), 4)
+    ]
+    return final_averages, formatted, pages
 
-        return final_averages, formatted
 
+def get_diary_grades(
+        login: str,
+        password: str,
+        days_back: int = None,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> tuple[dict[str, float | None], str]:
+    try:
+        data = get_grades_data(login, password, days_back=days_back, user_id=user_id, db=db, fernet=fernet)
     except Exception as e:
         logger.exception("Failed to get NZ grades")
         return {}, f"Помилка отримання даних: {e}"
-    finally:
-        _release_scraper(user_id, scraper, keep=user_id is not None)
+    averages, formatted, pages = format_grades(data)
+    store_grade_statement(user_id, formatted, pages)
+    return averages, formatted
+
+
+def store_grade_statement(user_id: int, main: str, pages: list[str]):
+    """Кеш для кнопок «Усі оцінки». Без сторінок — помилка, не затираємо."""
+    if pages:
+        _GRADE_STATEMENT_CACHE[user_id] = {"main": main, "pages": pages}
 
 
 def set_grade_statement_main(user_id: int, text: str):
@@ -976,34 +1051,13 @@ def _format_grade_list(grades: list[int]) -> str:
     )
 
 
-def _needed_twelves(grades: list[int], target: int) -> int:
-    """Return how many future 12s are needed for a rounded target grade."""
-    if not grades:
-        return 1
-
-    total = sum(grades)
-    count = len(grades)
-    target_threshold = 2 * target - 1  # target - 0.5, rounded half up
-    difference = target_threshold * count - 2 * total
-    if difference <= 0:
-        return 0
-
-    denominator = 24 - target_threshold  # 2 * (12 - target + 0.5)
-    return (difference + denominator - 1) // denominator
-
-
-def _rounded_tabular_grade(grades: list[int]) -> int:
-    """Round a positive grade average to the nearest integer, half up."""
-    return (2 * sum(grades) + len(grades)) // (2 * len(grades))
-
-
 def _target_progress(grades: list[int]) -> str:
-    current_grade = _rounded_tabular_grade(grades)
+    current_grade = rich.rounded_grade(grades)
     if current_grade >= 12:
         return "🎯 Цілі: Максимальний рівень досягнуто! 🎉"
 
     target = current_grade + 1
-    needed = _needed_twelves(grades, target)
+    needed = rich.needed_twelves(grades, target)
     return f"🎯 Цілі: 12x{needed} до {target}.00"
 
 
@@ -1119,14 +1173,15 @@ def get_homework_events(
 
 @_dedupe_call
 @_with_user_session_lock
-def get_diary_news(
+def get_news_data(
         login: str,
         password: str,
         limit: int = 10,
         user_id: int | None = None,
         db=None,
         fernet=None,
-) -> str:
+) -> list[dict]:
+    """[{name, date, text, link}, ...] — текст сирий, не екранований."""
     scraper, cached_scraper = _get_scraper(user_id)
     _record_nz_event(db, "memory_hit" if cached_scraper else "memory_miss")
     try:
@@ -1136,16 +1191,12 @@ def get_diary_news(
 
         root = soup.find("div", id="school-news-list")
         if not root:
-            return "Новини не знайдені."
+            return []
 
-        items = root.select("div.news-page__item")
-        if not items:
-            return "Новини не знайдені."
-
-        out_lines = []
+        out = []
         base = "https://nz.ua"
 
-        for item in items[:limit]:
+        for item in root.select("div.news-page__item")[:limit]:
             name_el = item.select_one(".news-page__header .news-page__name")
             date_el = item.select_one(".news-page__header .news-page__date")
             desc_el = item.select_one(".news-page__desc")
@@ -1153,28 +1204,53 @@ def get_diary_news(
             name = name_el.get_text(strip=True) if name_el else "—"
             date = date_el.get_text(strip=True) if date_el else ""
 
-            # Описание
             text = ""
-            link_html = ""
+            link = None
             if desc_el:
                 for br in desc_el.find_all("br"):
                     br.replace_with("\n")
                 text = desc_el.get_text(" ", strip=True)
-
-                # Ищем ссылку
                 link_tag = desc_el.find("a", href=True)
                 if link_tag:
                     link = urljoin(base, link_tag["href"])
-                    # делаем слово "Дистанційне завдання" кликабельным
-                    text = text.replace(
-                        "Дистанційне завдання",
-                        f'<a href="{link}">Дистанційне завдання</a>'
-                    )
 
-            out_lines.append(f"• <b>{name}</b> — {date}\n{text}".strip())
+            out.append({"name": name, "date": date, "text": text, "link": link})
 
-        return "\n\n".join(out_lines)
+        return out
     except Exception as e:
         raise e
     finally:
         _release_scraper(user_id, scraper, keep=user_id is not None)
+
+
+def format_news(items: list[dict]) -> str:
+    """Звичайний HTML-текст новин (запасний варіант для rich)."""
+    if not items:
+        return "Новини не знайдені."
+
+    out_lines = []
+    for item in items:
+        # текст новини пише школа — без екранування один «<» ламав
+        # розмітку всього повідомлення
+        text = html.escape(item["text"], quote=False)
+        if item["link"]:
+            # робимо слова "Дистанційне завдання" клікабельними
+            text = text.replace(
+                "Дистанційне завдання",
+                f'<a href="{html.escape(item["link"])}">Дистанційне завдання</a>'
+            )
+        out_lines.append(
+            f"• <b>{html.escape(item['name'], quote=False)}</b> — {html.escape(item['date'], quote=False)}\n{text}".strip()
+        )
+    return "\n\n".join(out_lines)
+
+
+def get_diary_news(
+        login: str,
+        password: str,
+        limit: int = 10,
+        user_id: int | None = None,
+        db=None,
+        fernet=None,
+) -> str:
+    return format_news(get_news_data(login, password, limit, user_id=user_id, db=db, fernet=fernet))

@@ -17,15 +17,18 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import texts
 from loader import (db, bot, HW_AI_CACHE, WRAPPED_CACHE, fernet, SEMAPHORE, ADMIN_ID, BOT_USERNAME,
-    COOKIE_API_TOKEN, COOKIE_SOURCE, COOKIE_VIP_DAYS, CHANNEL_ID, CHANNEL_URL)
+    CHANNEL_ID)
 from utils import (
-    track_activity, fix_ai_response, user_can_call, compact_num, answer_long,
+    track_activity, fix_ai_response, user_can_call, compact_num, answer_long, answer_rich, safe_send,
     REF_REWARD_INVITES,
 )
-from keyboards import build_vip_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb
+from keyboards import (
+    build_vip_kb, build_main_kb, share_kb, payment_keyboard, get_styles_kb, vip_plans_kb, vip_upsell_kb,
+)
 from states import AIStates, WrappedState
 from services.ai import ai, AIUnavailable
 from services.drawer import draw_wrapped
+from services import rich
 from services.diarynz import get_diary_grades
 
 router = Router()
@@ -44,7 +47,10 @@ WINBACK_GRACE_SEC = 48 * 3600
 VIP_EXPIRY_NOTICE_SEC = 48 * 3600
 
 
-CHANNEL_BONUS_DAYS = 3
+# Підписка на канал обов'язкова (гейт у middlewares), тож бонус отримував
+# кожен — і 3 дні VIP «на вході» привчали, що VIP дістається даром:
+# 146 безкоштовних VIP на місяць проти 0 покупок. Тепер — ШІ-запити.
+CHANNEL_BONUS_AI = 10
 
 
 @router.callback_query(F.data == "check_sub")
@@ -67,18 +73,16 @@ async def check_channel_sub(callback: CallbackQuery):
         await callback.answer("Бонус за підписку вже отримано 🙂", show_alert=True)
         return
 
-    db.set_vip(user_id, days=CHANNEL_BONUS_DAYS, source="ref")
+    db.add_ai_bonus(user_id, CHANNEL_BONUS_AI)
     db.record_command_metric("funnel:channel_bonus", 0)
 
     await callback.answer()
     await callback.message.answer(
-        f"🎁 <b>+{CHANNEL_BONUS_DAYS} дні VIP за підписку!</b>\n\n"
-        "✅ <b>Вже увімкнено:</b> сповіщення про нові оцінки "
-        "і нагадування перед онлайн-уроками.\n"
-        "🌅 Ранковий дайджест — /notify_digest\n\n"
-        "<i>Вимкнути сповіщення — /notify_grades, нагадування — /notify</i>",
+        f"🎁 <b>Дякуємо за підписку! +{CHANNEL_BONUS_AI} запитів до ШІ</b>\n\n"
+        "✨ Сфоткай задачу чи спитай про домашку — /ai\n"
+        "<i>Бонусні запити не згоряють і йдуть після тижневих безкоштовних.</i>",
         parse_mode="HTML",
-        reply_markup=build_vip_kb()
+        reply_markup=build_vip_kb() if _is_vip(user_id) else build_main_kb()
     )
 
 
@@ -109,21 +113,22 @@ async def vip_func(event: Union[Message, CallbackQuery]):
     now_ts = int(time.time())
     is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
     progress_text = f"{invites_left}/{REF_REWARD_INVITES} до наступних 3 днів VIP"
-    # Обмін увімкнено тільки коли є токен: без нього нагороду ніхто не видасть,
-    # і кнопка вела б у гру з обіцянкою, яку нема кому виконати
-    cookie_claimed = (not COOKIE_API_TOKEN
-                      or db.has_partner_grant(user_id, COOKIE_SOURCE))
 
     if is_vip:
         date_str = datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y")
         if expires == 0:
             date_str = "НАЗАВЖДИ :)"
-        await message_object.answer(
+        rich_text = rich.vip_status(
+            user_id=user_id, bot_username=BOT_USERNAME, expires=expires, expires_text=date_str,
+            invites_left=invites_left, reward_invites=REF_REWARD_INVITES, total_invites=total_invites,
+        )
+        await answer_rich(
+            message_object, rich_text,
             f"⭐️ Ви маєте VIP до <b>{date_str}</b>\n\n"
             f"🏆 /leaderboard - <b>Топ VIP Амбасадорів</b>\n"
             f"✨ /ai — <b>Використання ШІ</b>\n"
             f"👕 /wrapped — <b>Ексклюзивні теми (Matrix, Gold, Ocean)</b>\n"
-            f"📅 /diary_days (/diary) — <b>Перегляд розкладу по дням</b>\n"
+            f"📅 /diary — <b>Розклад на будь-який день</b>\n"
             f"📊 /avg_grades — <b>Розумний прогноз оцінок, рейтинг предметів, діаграма-павутинка</b>\n"
             f"🌅 /notify_digest — <b>Ранковий дайджест о 7:30 щодня</b>\n"
             f"⏰ /notify — <b>Нагадування перед уроками</b>\n"
@@ -135,17 +140,20 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"Всього запрошено: <b>{total_invites}</b>\n"
             f"Ваше реферальне посилання:\n"
             f"https://t.me/{BOT_USERNAME}?start={user_id}</blockquote>",
-            reply_markup=share_kb(user_id, cookie_claimed),
+            reply_markup=share_kb(user_id),
             parse_mode="HTML", disable_web_page_preview=True
         )
     else:
         db.record_command_metric("funnel:vip_menu", 0)
-        cookie_line = "" if cookie_claimed else (
-            f"🍪 <b>{COOKIE_VIP_DAYS} днів VIP безкоштовно</b> — просто зайди "
-            "в гру Cookie Merge за кнопкою внизу. Нагорода прилетить сюди "
-            "автоматично, платити нічого не треба.\n\n")
-        await message_object.answer(
-            f"{cookie_line}"
+        rich_text = rich.vip_offer(
+            user_id=user_id, bot_username=BOT_USERNAME, invites_left=invites_left,
+            reward_invites=REF_REWARD_INVITES, total_invites=total_invites,
+            free_ai_limit=FREE_AI_LIMIT,
+            # у Банці ті самі числа, тільки в гривнях
+            plans=[(p["label"], p["stars"], p["stars"]) for p in VIP_PLANS.values()],
+        )
+        await answer_rich(
+            message_object, rich_text,
             f"🎁 Безкоштовний VIP: {REF_REWARD_INVITES} друг → 3 дні VIP (до 9 днів на місяць)\n"
             f"Прогрес: <b>{progress_text}</b>\n"
             f"Всього запрошено: <b>{total_invites}</b>\n"
@@ -166,7 +174,7 @@ async def vip_func(event: Union[Message, CallbackQuery]):
             f"🔗 <a href='https://send.monobank.ua/jar/3bXsmYAcTp'>Натисніть тут, щоб відкрити Банку</a>\n"
             f"⚠️ <b>ВАЖЛИВО!</b> У коментар до платежу вставте свій ID:\n"
             f"👉 <code>{user_id}</code> 👈 <i>(натисніть щоб скопіювати)</i></blockquote>",
-            reply_markup=vip_plans_kb(user_id, cookie_claimed),
+            reply_markup=vip_plans_kb(user_id),
             disable_web_page_preview=True
         )
 
@@ -225,12 +233,15 @@ async def buy_winback(callback: CallbackQuery):
 
 @router.message(F.successful_payment)
 async def successful_payment(message: Message):
-    user_id = message.from_user.id
+    payer_id = message.from_user.id
 
     payload = message.successful_payment.invoice_payload or ""
     parts = payload.split(":")
     plan_key = parts[1] if len(parts) >= 2 and parts[0] == "vip" else "month"
     plan = WINBACK_PLAN if plan_key == "winback" else VIP_PLANS.get(plan_key, VIP_PLANS["month"])
+    # payload формує тільки бот, тож id у ньому чесний: батьки платять за
+    # дитину (handlers/parents), і VIP має отримати дитина, а не платник
+    user_id = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else payer_id
 
     db.set_vip(user_id, days=plan["days"], source="paid")
     # токени не зрізаємо, якщо в юзера залишилось більше
@@ -239,6 +250,26 @@ async def successful_payment(message: Message):
 
     vip, expires = db.get_vip_status(user_id)
     date_str = "НАЗАВЖДИ :)" if expires == 0 else datetime.datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M")
+
+    if user_id != payer_id:
+        db.record_command_metric("funnel:paid_by_parent", 0)
+        child_name = db.get_child_name(payer_id, user_id) or "дитини"
+        await message.answer(
+            f"✅ <b>Оплачено!</b> VIP для {escape(child_name)} діє до <b>{date_str}</b>.\n\n"
+            "🔔 Нові оцінки тепер приходитимуть вам і дитині одразу, як їх поставлять.\n"
+            "Статус — /parents",
+            parse_mode="HTML",
+        )
+        await safe_send(
+            user_id,
+            f"🎁 <b>Батьки оформили тобі VIP до {date_str}!</b>\n\n"
+            "✅ Вже увімкнено: сповіщення про нові оцінки і нагадування перед уроками.\n"
+            f"💎 ШІ-токенів: <b>{compact_num(db.get_tokens(user_id))}</b>\n"
+            "Усі можливості — /vip",
+            parse_mode="HTML", reply_markup=build_vip_kb(),
+        )
+        return
+
     await message.answer(
         f"✅ Ви отримали VIP доступ до {date_str}\n"
         f"💎 На балансі <b>{compact_num(db.get_tokens(user_id))} ШІ-токенів</b>!\n\n"
@@ -279,7 +310,7 @@ async def ai_start(message: Message, state: FSMContext):
             await state.set_state(AIStates.waiting_input)
             await message.reply(
                 "✨ Напиши питання текстом або надішли фото з підписом\n"
-                f"🎁 У тебе <b>{left}/{FREE_AI_LIMIT}</b> безкоштовних запитів на цьому тижні\n"
+                f"🎁 У тебе <b>{left}</b> безкоштовних запитів\n"
                 "Безліміт з 1M токенів — у /vip",
                 reply_markup=exit_kb
             )
@@ -345,7 +376,7 @@ def _ai_cost_footer(user_id: int, is_vip: bool, cost: int) -> str:
         db.deduct_tokens(user_id, cost)
         return f"\n💎 Витрачено: {cost} токенів."
     left = db.free_ai_left(user_id, FREE_AI_LIMIT)
-    return f"\n🎁 Безкоштовних запитів залишилось: {left}/{FREE_AI_LIMIT} (безліміт у /vip)"
+    return f"\n🎁 Безкоштовних запитів залишилось: {left} (безліміт у /vip)"
 
 
 @router.message(AIStates.waiting_input)

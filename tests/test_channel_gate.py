@@ -34,6 +34,12 @@ class ChannelGateBypassTests(unittest.TestCase):
         event = SimpleNamespace(successful_payment=None, text="/start 1076078800")
         self.assertTrue(self.mw.bypasses_channel_gate(event))
 
+    # батьки приходять платити — гейт шкільного каналу їх не зупиняє
+    def test_parent_entry_points_pass(self):
+        for text in ("/start p_abc123", "/parents"):
+            event = SimpleNamespace(successful_payment=None, text=text)
+            self.assertTrue(self.mw.bypasses_channel_gate(event), text)
+
     def test_regular_actions_are_gated(self):
         for text in ("/diary", "📅 Розклад", "/vip", None):
             event = SimpleNamespace(successful_payment=None, text=text)

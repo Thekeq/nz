@@ -784,9 +784,9 @@ def _funnel_text(f: dict[str, int], days: int) -> str:
     return (
         f"🎯 <b>Воронка VIP</b> (за {days} днів)\n"
         f"<i>Рахуються події, не унікальні люди.</i>\n\n"
-        f"<b>Безкоштовний VIP видано:</b>\n"
-        f"├ 🎁 тріал: {f.get('trial', 0)}\n"
-        f"└ 📣 бонус за канал: {f.get('channel_bonus', 0)}\n\n"
+        f"<b>Безкоштовне:</b>\n"
+        f"├ 🎁 тріал VIP: {f.get('trial', 0)}\n"
+        f"└ 📣 бонус за канал (ШІ-запити): {f.get('channel_bonus', 0)}\n\n"
         f"<b>Шлях до оплати:</b>\n"
         f"├ 👀 відкрили /vip без VIP: {menu}\n"
         f"├ 🧾 відкрили рахунок: {inv_total}\n"
@@ -796,7 +796,14 @@ def _funnel_text(f: dict[str, int], days: int) -> str:
         f"    {split(paid)}\n\n"
         f"<b>Конверсія:</b>\n"
         f"├ меню → рахунок: {_pct(inv_total, menu)}\n"
-        f"└ рахунок → оплата: {_pct(paid_total, inv_total)}"
+        f"└ рахунок → оплата: {_pct(paid_total, inv_total)}\n\n"
+        f"<b>👨‍👩‍👧 Батьки:</b>\n"
+        f"├ 📤 відкрили «для батьків»: {f.get('parent_menu', 0)}\n"
+        f"├ 🔗 підключились: {f.get('parent_linked', 0)}\n"
+        f"├ 🧾 рахунків від батьків: {f.get('parent_invoice', 0)} · Monobank: {f.get('parent_mono', 0)}\n"
+        f"├ ⏸ «VIP дитини закінчився» надіслано: {f.get('parent_winback_sent', 0)}\n"
+        f"└ 💰 оплатили батьки: {f.get('paid_by_parent', 0)}\n\n"
+        f"🔔 Підказка «пропущені оцінки» показана: {f.get('upsell_grades', 0)}"
     )
 
 

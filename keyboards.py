@@ -4,7 +4,7 @@ import datetime
 import uuid
 import pytz
 import texts
-from loader import BOT_USERNAME, HW_AI_CACHE, COOKIE_LINK, COOKIE_VIP_DAYS, CHANNEL_URL
+from loader import BOT_USERNAME, HW_AI_CACHE
 from utils import clean_html
 from urllib.parse import quote
 
@@ -15,18 +15,6 @@ CANONICAL_DAYS = ["понеділок", "вівторок", "середа", "ч�
 def _share_url(user_id: int, description: str) -> str:
     ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
     return f"https://t.me/share/url?url={quote(ref_link)}&text={quote(description)}"
-
-
-def cookie_row(claimed: bool) -> list:
-    """Рядок кнопки «тиждень VIP за гру» — або порожньо, якщо вже отримав.
-
-    Порожній рядок, а не сіра кнопка: нагорода видається один раз, і кнопка,
-    яка вже нічого не дасть, — це обіцянка, за якою нічого немає."""
-    if claimed:
-        return []
-    return [[InlineKeyboardButton(
-        text=f"🍪 {COOKIE_VIP_DAYS} днів VIP за гру Cookie Merge",
-        url=COOKIE_LINK)]]
 
 
 kb_retry = InlineKeyboardMarkup(
@@ -114,7 +102,7 @@ def build_vip_kb() -> ReplyKeyboardMarkup:
     )
 
 
-def share_kb(user_id: int, cookie_claimed: bool = True):
+def share_kb(user_id: int):
     description = (
         "\n📱 Мій шкільний асистент у Telegram\n\n"
         "• Оцінки з Нових Знань (NZ.ua)\n"
@@ -131,9 +119,7 @@ def share_kb(user_id: int, cookie_claimed: bool = True):
                     url=_share_url(user_id, description)
                 )
             ],
-            # VIP-у теж є сенс показувати: set_vip додає дні до залишку,
-            # а не переписує строк
-            *cookie_row(cookie_claimed)
+            [InlineKeyboardButton(text="👨‍👩‍👧 Підключити батьків до оцінок", callback_data="pa:menu")],
         ]
     )
 
@@ -166,7 +152,7 @@ def payment_keyboard(stars: int = 75):
     return builder.as_markup()
 
 
-def vip_plans_kb(user_id: int, cookie_claimed: bool = True):
+def vip_plans_kb(user_id: int):
     description = (
         "\n📱 Мій шкільний асистент у Telegram\n\n"
         "• Оцінки з Нових Знань (NZ.ua)\n"
@@ -179,12 +165,9 @@ def vip_plans_kb(user_id: int, cookie_claimed: bool = True):
             [InlineKeyboardButton(text="🐣 1 тиждень — 25 ⭐️", callback_data="buy:week")],
             [InlineKeyboardButton(text="🔥 1 місяць — 75 ⭐️ (популярний)", callback_data="buy:month")],
             [InlineKeyboardButton(text="💎 3 місяці — 200 ⭐️ (вигідніше)", callback_data="buy:months3")],
-            # Перша серед безкоштовних: дає більше днів і не вимагає, щоб
-            # хтось інший погодився поставити бота
-            *cookie_row(cookie_claimed),
+            # у школяра рідко є чим платити — платять батьки
+            [InlineKeyboardButton(text="👨‍👩‍👧 Попросити батьків оплатити", callback_data="pa:menu")],
             [InlineKeyboardButton(text="🎁 Безкоштовно: запросити друга", url=_share_url(user_id, description))],
-            [InlineKeyboardButton(text="📣 +3 дні за підписку на канал", url=CHANNEL_URL)],
-            [InlineKeyboardButton(text="✅ Я підписався", callback_data="check_sub")],
         ]
     )
 
@@ -193,7 +176,8 @@ def vip_upsell_kb():
     """Кнопка під пейволом: веде одразу до тарифів, а не в глухий кут."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⭐️ Отримати VIP", callback_data="vip_menu")]
+            [InlineKeyboardButton(text="⭐️ Отримати VIP", callback_data="vip_menu")],
+            [InlineKeyboardButton(text="👨‍👩‍👧 Попросити батьків", callback_data="pa:menu")],
         ]
     )
 

@@ -28,19 +28,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "1076078800"))
 CHANNEL_ID = "@nzdiaryua"
 CHANNEL_URL = "https://t.me/nzdiaryua"
 
-# Cookie Merge на цій же машині: хто перейшов у гру за нашим посиланням
-# (?startapp=src_nz) і зареєструвався там, отримує тиждень VIP тут.
-# Порожній PARTNER_TOKEN — обмін вимкнено (так і на дев-машині, де сусіднього
-# проєкту немає). Адреса локальна: гра слухає 127.0.0.1:8000, назовні її
-# порт не виходить, тому токен не їздить по мережі.
-COOKIE_API_URL = os.getenv("COOKIE_API_URL", "http://127.0.0.1:8000").rstrip("/")
-COOKIE_API_TOKEN = os.getenv("PARTNER_TOKEN", "")
-COOKIE_SOURCE = os.getenv("COOKIE_SOURCE", "nz")
-COOKIE_VIP_DAYS = int(os.getenv("COOKIE_VIP_DAYS", "7"))
-# Посилання з міткою джерела. Без ?startapp=src_<code> перехід не рахується
-# зовсім: гра пише мітку рівно один раз, у момент реєстрації.
-COOKIE_LINK = os.getenv(
-    "COOKIE_LINK", f"https://t.me/CookieMerge_bot?startapp=src_{COOKIE_SOURCE}")
+# Rich-повідомлення (таблиці, заголовки, згортання — Bot API 10.1+).
+# RICH_MESSAGES=0 (і перезапуск) повертає старий HTML без правок коду,
+# якщо на якихось клієнтах вони покажуться криво.
+RICH_MESSAGES = os.getenv("RICH_MESSAGES", "1") != "0"
 
 # Ініціалізація
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

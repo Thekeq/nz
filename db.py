@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import secrets
 import threading
 
 
@@ -236,40 +237,41 @@ class DataBase:
                 )
             """)
 
-            # Нагороди за партнерські проєкти (Cookie Merge). PRIMARY KEY на
-            # (user_id, source) — це і є захист від подвійної видачі: сусідній
-            # проєкт віддає ВЕСЬ список своїх реєстрацій при кожному опитуванні,
-            # і саме вставка вирішує, кому платити. Тому опитування можна
-            # повторювати скільки завгодно, а впала задача посеред видачі —
-            # наступний прохід просто доплатить решту.
+            # Батьківський режим. Запрошення одноразове: переслане далі
+            # посилання вже нікого не підключить. Імена з Telegram на момент
+            # підключення: батьки бачать, чиї оцінки, а дитина — хто їх читає.
             self.connection.execute("""
-                CREATE TABLE IF NOT EXISTS partner_grants (
-                  user_id    INTEGER NOT NULL,
-                  source     TEXT NOT NULL,
-                  granted_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-                  PRIMARY KEY(user_id, source)
+                CREATE TABLE IF NOT EXISTS parent_invites (
+                  token      TEXT PRIMARY KEY,
+                  child_id   INTEGER NOT NULL,
+                  child_name TEXT NOT NULL DEFAULT '',
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
                 )
             """)
-
-    # ===== Партнерські нагороди =====
-
-    def has_partner_grant(self, user_id: int, source: str) -> bool:
-        """Чи вже отримав цю нагороду. Тільки для показу кнопки: рішення про
-        виплату приймає claim_partner_grant, і воно атомарне."""
-        with self.connection:
-            return self.connection.execute(
-                "SELECT 1 FROM partner_grants WHERE user_id=? AND source=?",
-                (user_id, source)
-            ).fetchone() is not None
-
-    def claim_partner_grant(self, user_id: int, source: str) -> bool:
-        """True рівно один раз на пару (user_id, source) — тоді й платимо."""
-        with self.connection:
-            cur = self.connection.execute(
-                "INSERT OR IGNORE INTO partner_grants(user_id, source) VALUES (?, ?)",
-                (user_id, source)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS parents (
+                  parent_id  INTEGER NOT NULL,
+                  child_id   INTEGER NOT NULL,
+                  child_name TEXT NOT NULL DEFAULT '',
+                  parent_name TEXT NOT NULL DEFAULT '',
+                  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                  PRIMARY KEY(parent_id, child_id)
+                )
+            """)
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_parents_child ON parents(child_id)"
             )
-            return cur.rowcount > 0
+
+            for ddl in (
+                # бонусні ШІ-запити (за підписку на канал): не згоряють щотижня
+                "ALTER TABLE subs ADD COLUMN ai_bonus INTEGER NOT NULL DEFAULT 0",
+                # скільки оцінок юзер бачив минулого разу (-1 — ще не дивився)
+                "ALTER TABLE subs ADD COLUMN seen_grades INTEGER NOT NULL DEFAULT -1",
+            ):
+                try:
+                    self.connection.execute(ddl)
+                except Exception:
+                    pass
 
     # ===== FSM storage (aiogram) =====
 
@@ -867,10 +869,10 @@ class DataBase:
                 (week, user_id, week)
             )
             row = self.connection.execute(
-                "SELECT ai_free_used FROM subs WHERE user_id=?", (user_id,)
+                "SELECT ai_free_used, ai_bonus FROM subs WHERE user_id=?", (user_id,)
             ).fetchone()
-            used = int(row[0] or 0) if row else 0
-            return max(0, limit - used)
+            used, bonus = (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+            return max(0, limit - used) + bonus
 
     def try_use_free_ai(self, user_id: int, limit: int = 3) -> bool:
         """Атомарно списує 1 безкоштовний AI-запит тижня. True — якщо вдалося."""
@@ -884,6 +886,112 @@ class DataBase:
             cur = self.connection.execute(
                 "UPDATE subs SET ai_free_used=ai_free_used+1 WHERE user_id=? AND ai_free_used<?",
                 (user_id, limit)
+            )
+            if cur.rowcount == 1:
+                return True
+            # тижневі закінчились — беремо з бонусних
+            cur = self.connection.execute(
+                "UPDATE subs SET ai_bonus=ai_bonus-1 WHERE user_id=? AND ai_bonus>0",
+                (user_id,)
+            )
+            return cur.rowcount == 1
+
+    def add_ai_bonus(self, user_id: int, requests: int):
+        self.ensure_user(user_id)
+        with self.connection:
+            self.connection.execute(
+                "UPDATE subs SET ai_bonus=ai_bonus+? WHERE user_id=?", (requests, user_id)
+            )
+
+    def swap_seen_grades(self, user_id: int, total: int) -> int:
+        """Запам'ятовує, скільки оцінок юзер бачить зараз; повертає попереднє (-1 — вперше)."""
+        self.ensure_user(user_id)
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT seen_grades FROM subs WHERE user_id=?", (user_id,)
+            ).fetchone()
+            self.connection.execute(
+                "UPDATE subs SET seen_grades=? WHERE user_id=?", (total, user_id)
+            )
+            return int(row[0]) if row and row[0] is not None else -1
+
+    # ===== Батьківський режим =====
+
+    PARENT_INVITE_TTL = 7 * 24 * 3600
+
+    def get_or_create_parent_invite(self, child_id: int, child_name: str) -> str:
+        """Чинне запрошення дитини або нове. Не перевипускаємо при кожному
+        відкритті меню: інакше вже надіслане батькам посилання помирало б."""
+        cutoff = int(datetime.datetime.now().timestamp()) - self.PARENT_INVITE_TTL
+        with self.connection:
+            self.connection.execute("DELETE FROM parent_invites WHERE created_at<?", (cutoff,))
+            row = self.connection.execute(
+                "SELECT token FROM parent_invites WHERE child_id=?", (child_id,)
+            ).fetchone()
+            if row:
+                return row[0]
+            token = secrets.token_urlsafe(12)
+            self.connection.execute(
+                "INSERT INTO parent_invites(token, child_id, child_name) VALUES (?, ?, ?)",
+                (token, child_id, child_name[:64])
+            )
+            return token
+
+    def redeem_parent_invite(self, token: str, parent_id: int, parent_name: str) -> tuple[int, str] | None:
+        """Підключає батьків за запрошенням. (child_id, child_name) або None,
+        якщо посилання недійсне, прострочене чи це сама дитина."""
+        cutoff = int(datetime.datetime.now().timestamp()) - self.PARENT_INVITE_TTL
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT child_id, child_name FROM parent_invites WHERE token=? AND created_at>=?",
+                (token, cutoff)
+            ).fetchone()
+            if not row or int(row[0]) == parent_id:
+                return None
+            cur = self.connection.execute("DELETE FROM parent_invites WHERE token=?", (token,))
+            if cur.rowcount != 1:
+                return None  # хтось інший встиг першим
+            child_id, child_name = int(row[0]), row[1]
+            self.connection.execute(
+                """
+                INSERT INTO parents(parent_id, child_id, child_name, parent_name) VALUES (?, ?, ?, ?)
+                ON CONFLICT(parent_id, child_id) DO UPDATE SET
+                    child_name=excluded.child_name, parent_name=excluded.parent_name
+                """,
+                (parent_id, child_id, child_name, parent_name[:64])
+            )
+            return child_id, child_name
+
+    def get_parents(self, child_id: int) -> list[tuple[int, str, str]]:
+        """[(parent_id, parent_name, child_name), ...]"""
+        with self.connection:
+            rows = self.connection.execute(
+                "SELECT parent_id, parent_name, child_name FROM parents WHERE child_id=? ORDER BY created_at",
+                (child_id,)
+            ).fetchall()
+        return [(int(p), pn, cn) for p, pn, cn in rows]
+
+    def get_children(self, parent_id: int) -> list[tuple[int, str]]:
+        with self.connection:
+            rows = self.connection.execute(
+                "SELECT child_id, child_name FROM parents WHERE parent_id=? ORDER BY created_at",
+                (parent_id,)
+            ).fetchall()
+        return [(int(c), n) for c, n in rows]
+
+    def get_child_name(self, parent_id: int, child_id: int) -> str | None:
+        """Ім'я дитини, якщо parent_id справді підключений до неї, інакше None."""
+        with self.connection:
+            row = self.connection.execute(
+                "SELECT child_name FROM parents WHERE parent_id=? AND child_id=?",
+                (parent_id, child_id)
+            ).fetchone()
+        return row[0] if row else None
+
+    def unlink_parent(self, parent_id: int, child_id: int) -> bool:
+        with self.connection:
+            cur = self.connection.execute(
+                "DELETE FROM parents WHERE parent_id=? AND child_id=?", (parent_id, child_id)
             )
             return cur.rowcount == 1
 
@@ -1013,14 +1121,18 @@ class DataBase:
             return bool(int(row[0] or 0)) if row else False
 
     def get_users_with_grades_notify(self):
+        """(user_id, login, password, notify_grades): хто ввімкнув сповіщення
+        сам, і діти, за чиїми оцінками стежать батьки — навіть якщо дитина
+        свої сповіщення вимкнула."""
         with self.connection:
             return self.connection.execute(
                 """
-                SELECT u.user_id, c.login, c.password
+                SELECT u.user_id, c.login, c.password, s.notify_grades
                 FROM subs s
                 JOIN users u ON u.user_id=s.user_id
                 LEFT JOIN creds c ON c.user_id=u.user_id
                 WHERE s.notify_grades=1
+                   OR EXISTS (SELECT 1 FROM parents p WHERE p.child_id=u.user_id)
                 """
             ).fetchall()
 

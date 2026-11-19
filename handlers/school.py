@@ -3,23 +3,26 @@ import time
 import re
 import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from quickchart import QuickChart
 
 import texts
-from loader import db, fernet, SEMAPHORE, ADMIN_ID
-from utils import user_can_call, track_activity, process_referral_reward, answer_long
+from loader import db, fernet, SEMAPHORE, ADMIN_ID, RICH_MESSAGES
+from utils import (
+    user_can_call, track_activity, process_referral_reward, answer_long, answer_rich, edit_rich,
+)
 from textutils import CAPTION_LIMIT
 from keyboards import (
     kb_retry, build_main_kb, build_vip_kb, keyboard_diary, keyboard_hw, add_ai_button,
-    result_actions_kb, grades_main_kb, grades_page_kb,
+    result_actions_kb, grades_main_kb, grades_page_kb, vip_upsell_kb,
 )
+from services import rich
 from services.diarynz import (
-    get_diary_schedule, get_diary_grades, get_diary_news, get_diary_homework,
-    get_grade_statement, set_grade_statement_main, InvalidCredentials,
+    get_schedule_data, format_schedule, get_homework_data, format_homework,
+    get_news_data, format_news, get_grades_data, format_grades,
+    get_grade_statement, set_grade_statement_main, store_grade_statement, InvalidCredentials,
 )
 
 router = Router()
@@ -49,34 +52,36 @@ async def get_diary(message: Message, state: FSMContext):
                 is_tiktok = TIKTOK_MODE
 
             async with SEMAPHORE:
-                schedule = await asyncio.to_thread(
-                    get_diary_schedule,
+                data = await asyncio.to_thread(
+                    get_schedule_data,
                     login,
                     password,
-                    is_tiktok_mode=is_tiktok,
                     user_id=user_id,
                     db=db,
                     fernet=fernet
                 )
-                if schedule:  # или другой признак “ок”
+                if data is not None:
                     db.set_creds_verified(user_id, 1)
                     # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
                     await process_referral_reward(user_id)
+            schedule = format_schedule(data, is_tiktok)
+            rich_schedule = rich.schedule(data, is_tiktok) if data is not None else None
 
             if message.chat.type == "private":
                 vip_flag, expires = db.get_vip_status(user_id)
                 now_ts = int(time.time())
                 is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
-                if is_vip:
-                    keyboard = await keyboard_diary()
-                    await message.reply("✅ Ось ваш розклад:", reply_markup=build_vip_kb())
-                    await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
-                else:
-                    keyboard = await keyboard_diary()
-                    await message.reply("✅ Ось ваш розклад:", reply_markup=build_main_kb())
-                    await answer_long(message, schedule, reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True)
+                keyboard = await keyboard_diary()
+                await message.reply(
+                    "✅ Ось ваш розклад:",
+                    reply_markup=build_vip_kb() if is_vip else build_main_kb()
+                )
+                await answer_rich(
+                    message, rich_schedule, schedule,
+                    reply_markup=result_actions_kb(user_id, keyboard), disable_web_page_preview=True
+                )
             else:
-                await message.answer(f"{schedule}")
+                await answer_rich(message, rich_schedule, schedule)
 
         except InvalidCredentials as e:
             await message.answer(f"❌ {e}", reply_markup=kb_retry)
@@ -119,8 +124,8 @@ async def homework_cmd(message: Message, state: FSMContext):
 
     try:
         async with SEMAPHORE:
-            text = await asyncio.to_thread(
-                get_diary_homework,
+            data = await asyncio.to_thread(
+                get_homework_data,
                 login,
                 password,
                 user_id=user_id,
@@ -128,16 +133,16 @@ async def homework_cmd(message: Message, state: FSMContext):
                 fernet=fernet
             )
 
-            if text:
+            if data is not None:
                 db.set_creds_verified(user_id, 1)
                 await process_referral_reward(user_id)
 
-        # --- ЗМІНИ ТУТ ---
-        # Модифікуємо клавіатуру, додаючи кнопку ШІ з актуальним текстом
+        text = format_homework(data)
+        # кнопка ШІ кешує звичайний текст ДЗ — його й отримує модель
         final_keyboard = add_ai_button(base_keyboard, text)
 
-        await answer_long(
-            message, text,
+        await answer_rich(
+            message, rich.homework(data) if data is not None else None, text,
             reply_markup=result_actions_kb(user_id, final_keyboard),
             parse_mode="HTML",
             disable_web_page_preview=True
@@ -176,8 +181,8 @@ async def news_command(message: Message, state: FSMContext):
         password = fernet.decrypt(enc_password.encode()).decode()
 
         async with SEMAPHORE:
-            text = await asyncio.to_thread(
-                get_diary_news,
+            items = await asyncio.to_thread(
+                get_news_data,
                 login,
                 password,
                 10,
@@ -185,12 +190,14 @@ async def news_command(message: Message, state: FSMContext):
                 db=db,
                 fernet=fernet
             )
-            if text:
-                db.set_creds_verified(user_id, 1)
-                # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
-                await process_referral_reward(user_id)
+            db.set_creds_verified(user_id, 1)
+            # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
+            await process_referral_reward(user_id)
 
-        await answer_long(message, text, reply_markup=result_actions_kb(user_id))
+        await answer_rich(
+            message, rich.news(items), format_news(items),
+            reply_markup=result_actions_kb(user_id), disable_web_page_preview=True
+        )
     except Exception:
         logger.exception("Failed to get news for user_id=%s", user_id)
         await message.answer("❌ Не вдалося отримати новини. Спробуйте пізніше.", reply_markup=kb_retry)
@@ -285,57 +292,79 @@ async def get_grades(message: Message, state: FSMContext):
         password = fernet.decrypt(enc_password.encode()).decode()
 
         async with SEMAPHORE:
-            grades, text = await asyncio.to_thread(
-                get_diary_grades,
+            data = await asyncio.to_thread(
+                get_grades_data,
                 login,
                 password,
                 user_id=user_id,
                 db=db,
                 fernet=fernet
             )
+        _, text, pages = format_grades(data)
+        store_grade_statement(user_id, text, pages)
 
         # перевіряємо VIP
         vip_flag, expires = db.get_vip_status(user_id)
         now_ts = int(time.time())
         is_vip = bool(vip_flag) and (expires == 0 or expires > now_ts)
 
+        # звичайний HTML: запасний варіант і сторінки «Усі оцінки» для нього
         if is_vip:
             extra = build_vip_grade_summary(text)
             final_text = f"{text}\n\n{extra}" if extra else text
-            final_text = _no_grades_note(text) + final_text
-            set_grade_statement_main(user_id, final_text)
-            _, grade_pages = get_grade_statement(user_id)
-            actions_kb = result_actions_kb(user_id, grades_main_kb(len(grade_pages)))
-
-            url = photo_grades(text)
-
-            if url:
-                # ліміт підпису до фото — 1024, а не 4096: у кого багато
-                # предметів, підпис не влазить, тому текст іде окремо
-                if len(final_text) <= CAPTION_LIMIT:
-                    await message.answer_photo(
-                        photo=url, caption=final_text, parse_mode="HTML",
-                        reply_markup=actions_kb
-                    )
-                else:
-                    await message.answer_photo(photo=url, caption="📊 Твоя статистика")
-                    await answer_long(
-                        message, final_text,
-                        reply_markup=actions_kb, parse_mode="HTML"
-                    )
-            else:
-                await answer_long(message, final_text, reply_markup=actions_kb, parse_mode="HTML")
-
         else:
-            final_text = _no_grades_note(text) + text
-            set_grade_statement_main(user_id, final_text)
-            _, grade_pages = get_grade_statement(user_id)
-            await answer_long(
-                message,
-                final_text,
-                reply_markup=result_actions_kb(user_id, grades_main_kb(len(grade_pages))),
+            final_text = text
+        final_text = _no_grades_note(text) + final_text
+        set_grade_statement_main(user_id, final_text)
+        classic_kb = result_actions_kb(user_id, grades_main_kb(len(pages)))
+        url = photo_grades(text) if is_vip else None
+
+        # Момент цінності: людина сама прийшла дивитися оцінки, і частину
+        # з них VIP приніс би раніше. Кажемо це тут, а не в абстрактному меню.
+        missed = 0
+        if "error" not in data:
+            total = sum(len(s["all"]) for s in data["subjects"].values())
+            seen = db.swap_seen_grades(user_id, total)
+            if not is_vip and 0 <= seen < total:
+                missed = total - seen
+                db.record_command_metric("funnel:upsell_grades", 0)
+        rich_note = classic_note = ""
+        if missed:
+            rich_note = (
+                f"<blockquote>🔔 З минулого разу — <b>{missed} {rich.plural_new_grades(missed)}</b>. "
+                "З VIP вони приходять одразу, як вчитель поставив. "
+                "Батьки теж можуть їх отримувати — /parents</blockquote>"
+            )
+            classic_note = (
+                f"🔔 З минулого разу — <b>{missed} {rich.plural_new_grades(missed)}</b>. "
+                "З VIP вони приходять одразу, як вчитель поставив.\n\n"
+            )
+            pager = grades_main_kb(len(pages))
+            classic_kb = result_actions_kb(user_id, InlineKeyboardMarkup(inline_keyboard=[
+                *(pager.inline_keyboard if pager else []), *vip_upsell_kb().inline_keyboard
+            ]))
+
+        if RICH_MESSAGES and "error" not in data:
+            # rich вміщує всі оцінки одним повідомленням (згортання замість
+            # сторінок), тож гортати нема чого — лишаємо тільки «Поділитися»
+            if url:
+                await message.answer_photo(photo=url, caption="📊 Твоя статистика")
+            await answer_rich(
+                message, rich_note + rich.grades(data, is_vip), classic_note + final_text,
+                reply_markup=result_actions_kb(user_id, vip_upsell_kb() if missed else None),
+                fallback_markup=classic_kb,
                 parse_mode="HTML",
             )
+        elif url and len(classic_note + final_text) <= CAPTION_LIMIT:
+            await message.answer_photo(
+                photo=url, caption=classic_note + final_text, parse_mode="HTML", reply_markup=classic_kb
+            )
+        else:
+            # ліміт підпису до фото — 1024, а не 4096: у кого багато
+            # предметів, підпис не влазить, тому текст іде окремо
+            if url:
+                await message.answer_photo(photo=url, caption="📊 Твоя статистика")
+            await answer_long(message, classic_note + final_text, reply_markup=classic_kb, parse_mode="HTML")
 
     except InvalidCredentials as e:
         await message.answer(f"❌ {e}", reply_markup=kb_retry)
@@ -433,8 +462,8 @@ async def diary_day_selected(callback: CallbackQuery):
 
     try:
         async with SEMAPHORE:
-            schedule = await asyncio.to_thread(
-                get_diary_schedule,
+            data = await asyncio.to_thread(
+                get_schedule_data,
                 login,
                 password,
                 days=[day],
@@ -442,7 +471,7 @@ async def diary_day_selected(callback: CallbackQuery):
                 db=db,
                 fernet=fernet
             )
-            if schedule:
+            if data is not None:
                 db.set_creds_verified(user_id, 1)
                 # Засчитать рефералку ТОЛЬКО после verified и только 1 раз на юзера
                 await process_referral_reward(user_id)
@@ -453,17 +482,13 @@ async def diary_day_selected(callback: CallbackQuery):
         return
 
     keyboard = await keyboard_diary(day)
-    if not schedule:
-        await callback.message.answer(f"📅 Розклад на {day} не знайдено або сталася помилка.")
-    else:
-        try:
-            await callback.message.edit_text(f"{schedule}", reply_markup=result_actions_kb(user_id, keyboard), parse_mode="HTML",
-                                             disable_web_page_preview=True)
-        except TelegramBadRequest as e:
-            if "message is not modified" in str(e):
-                pass  # всё ок, просто тот же текст
-            else:
-                raise
+    await edit_rich(
+        callback.message,
+        rich.schedule(data) if data is not None else None,
+        format_schedule(data),
+        reply_markup=result_actions_kb(user_id, keyboard),
+        parse_mode="HTML", disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("diary_hw:"))
@@ -490,8 +515,8 @@ async def diary_hw_selected(callback: CallbackQuery):
 
     try:
         async with SEMAPHORE:
-            schedule = await asyncio.to_thread(
-                get_diary_homework,
+            data = await asyncio.to_thread(
+                get_homework_data,
                 login,
                 password,
                 days=[day],
@@ -508,22 +533,17 @@ async def diary_hw_selected(callback: CallbackQuery):
     # Отримуємо чисту клавіатуру навігації
     base_keyboard = await keyboard_hw(day)
 
-    # --- ЗМІНИ ТУТ ---
-    # Прикріплюємо кнопку ШІ до НОВОГО тексту (schedule)
-    final_keyboard = add_ai_button(base_keyboard, schedule)
+    text = format_homework(data)
+    # Прикріплюємо кнопку ШІ до НОВОГО тексту
+    final_keyboard = add_ai_button(base_keyboard, text)
 
-    try:
-        await callback.message.edit_text(
-            f"{schedule}",
-            parse_mode="HTML",
-            reply_markup=result_actions_kb(user_id, final_keyboard),
-            disable_web_page_preview=True
-        )
-    except TelegramBadRequest as e:
-        if "message is not modified" in str(e):
-            pass
-        else:
-            raise
+    await edit_rich(
+        callback.message,
+        rich.homework(data) if data is not None else None,
+        text,
+        reply_markup=result_actions_kb(user_id, final_keyboard),
+        parse_mode="HTML", disable_web_page_preview=True,
+    )
 
 
 def parse_grades_text(text: str):

@@ -3,8 +3,9 @@ import datetime
 import time
 import re
 import logging
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
-from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, db, bot
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter, TelegramForbiddenError
+from aiogram.types import InputRichMessage
+from loader import ADMIN_ID, RATE_LOCK, USER_LAST_CALL, RICH_MESSAGES, db, bot
 from textutils import split_message, CAPTION_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,45 @@ async def answer_long(message, text: str, reply_markup=None, **kwargs):
             **kwargs
         )
     return len(parts)
+
+
+async def answer_rich(message, rich_html: str | None, fallback: str, reply_markup=None,
+                      fallback_markup=None, **kwargs):
+    """Rich-повідомлення, а якщо Telegram його не прийняв — звичайний HTML.
+
+    Відкат ловить те, що відхилив сервер: помилку розмітки, ліміти rich.
+    Краще старий вигляд, ніж мовчання.
+    kwargs ідуть лише в запасний варіант (parse_mode, disable_web_page_preview),
+    fallback_markup — клавіатура для нього, якщо має відрізнятися.
+    """
+    if RICH_MESSAGES and rich_html:
+        try:
+            return await message.answer_rich(
+                InputRichMessage(html=rich_html), reply_markup=reply_markup
+            )
+        except TelegramBadRequest:
+            logger.exception("Rich message rejected, falling back to HTML")
+    await answer_long(message, fallback, reply_markup=fallback_markup or reply_markup, **kwargs)
+
+
+async def edit_rich(message, rich_html: str | None, fallback: str, reply_markup=None, **kwargs):
+    """Те саме для редагування (перемикання днів у розкладі / ДЗ)."""
+    try:
+        if RICH_MESSAGES and rich_html:
+            try:
+                await message.edit_text(
+                    rich_message=InputRichMessage(html=rich_html),
+                    reply_markup=reply_markup, parse_mode=None,
+                )
+                return
+            except TelegramBadRequest as e:
+                if "message is not modified" in str(e):
+                    return
+                logger.exception("Rich edit rejected, falling back to HTML")
+        await message.edit_text(fallback, reply_markup=reply_markup, **kwargs)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 async def safe_send(

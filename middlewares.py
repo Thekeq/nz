@@ -21,7 +21,10 @@ def bypasses_channel_gate(event) -> bool:
     """
     if getattr(event, "successful_payment", None) is not None:
         return True
-    return (getattr(event, "text", None) or "").startswith("/start")
+    text = getattr(event, "text", None) or ""
+    # /parents — батьки, які прийшли платити, а не вчитися: змушувати їх
+    # підписуватися на шкільний канал означає втратити покупця
+    return text.startswith("/start") or text.startswith("/parents")
 
 
 def is_active_channel_member(member) -> bool:
@@ -50,6 +53,10 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
         # This callback is the only action available before subscription:
         # it performs the membership check and unlocks the bot afterwards.
         if isinstance(event, CallbackQuery) and event.data == "check_sub":
+            return await handler(event, data)
+
+        # кнопки батьківського режиму (оплата за дитину, відписка) — з тієї ж причини
+        if isinstance(event, CallbackQuery) and (event.data or "").startswith("pa:"):
             return await handler(event, data)
 
         if isinstance(event, Message) and bypasses_channel_gate(event):

@@ -202,24 +202,6 @@ class ChannelBonusTests(unittest.TestCase):
         self.assertTrue(self.db.try_use_channel_bonus(1))
         self.assertTrue(self.db.try_use_channel_bonus(2))
 
-    # Сусідній проєкт віддає весь свій список при кожному опитуванні —
-    # захист від подвійної видачі тут єдиний, і він у вставці.
-    def test_partner_grant_is_one_shot(self):
-        self.assertTrue(self.db.claim_partner_grant(1, "nz"))
-        self.assertFalse(self.db.claim_partner_grant(1, "nz"))
-
-    # Кнопка «тиждень VIP за гру» ховається саме по цьому прапорцю
-    def test_partner_grant_flag_follows_the_claim(self):
-        self.assertFalse(self.db.has_partner_grant(1, "nz"))
-        self.db.claim_partner_grant(1, "nz")
-        self.assertTrue(self.db.has_partner_grant(1, "nz"))
-        self.assertFalse(self.db.has_partner_grant(1, "other"))
-
-    def test_partner_grant_is_per_user_and_source(self):
-        self.assertTrue(self.db.claim_partner_grant(1, "nz"))
-        self.assertTrue(self.db.claim_partner_grant(2, "nz"))
-        self.assertTrue(self.db.claim_partner_grant(1, "other"))
-
 
 class FunnelMetricsTests(unittest.TestCase):
     def setUp(self):
@@ -273,3 +255,78 @@ class VipEnablesNotificationsTests(unittest.TestCase):
         self.db.toggle_notify_grades(1)                  # вимкнено
         self.db.set_vip(1, days=7)                       # купив
         self.assertTrue(self.db.user_notify_grades(1))
+
+
+class ParentModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_invite_is_reused_until_redeemed(self):
+        # повторне відкриття меню не має вбивати вже надіслане посилання
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        self.assertEqual(self.db.get_or_create_parent_invite(1, "Петро"), token)
+
+    def test_invite_is_one_shot(self):
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        self.assertEqual(self.db.redeem_parent_invite(token, 2, "Мама"), (1, "Петро"))
+        self.assertIsNone(self.db.redeem_parent_invite(token, 3, "Хтось"))
+        self.assertEqual(self.db.get_parents(1), [(2, "Мама", "Петро")])
+        self.assertEqual(self.db.get_children(2), [(1, "Петро")])
+
+    def test_child_cannot_be_own_parent(self):
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        self.assertIsNone(self.db.redeem_parent_invite(token, 1, "Петро"))
+        self.assertEqual(self.db.get_parents(1), [])
+
+    def test_expired_invite_rejected(self):
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        with self.db.connection:
+            self.db.connection.execute("UPDATE parent_invites SET created_at=0")
+        self.assertIsNone(self.db.redeem_parent_invite(token, 2, "Мама"))
+
+    def test_unlink_and_ownership_check(self):
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        self.db.redeem_parent_invite(token, 2, "Мама")
+        self.assertEqual(self.db.get_child_name(2, 1), "Петро")
+        self.assertIsNone(self.db.get_child_name(3, 1))   # чужі батьки не платять «за» дитину
+        self.assertTrue(self.db.unlink_parent(2, 1))
+        self.assertFalse(self.db.unlink_parent(2, 1))
+        self.assertIsNone(self.db.get_child_name(2, 1))
+
+    def test_watched_child_gets_grade_checks_even_with_own_notify_off(self):
+        self.db.ensure_user(1)
+        self.db.add_user(1, "login", "enc")
+        self.assertEqual(self.db.get_users_with_grades_notify(), [])
+        token = self.db.get_or_create_parent_invite(1, "Петро")
+        self.db.redeem_parent_invite(token, 2, "Мама")
+        rows = self.db.get_users_with_grades_notify()
+        self.assertEqual([(r[0], r[3]) for r in rows], [(1, 0)])
+
+
+class AiBonusAndSeenGradesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db = DataBase(os.path.join(self.tmpdir.name, "test.db"))
+
+    def tearDown(self):
+        self.db.connection.close()
+        self.tmpdir.cleanup()
+
+    def test_bonus_spent_after_weekly(self):
+        self.db.add_ai_bonus(1, 2)
+        self.assertEqual(self.db.free_ai_left(1, limit=1), 3)
+        self.assertTrue(self.db.try_use_free_ai(1, limit=1))   # тижневий
+        self.assertTrue(self.db.try_use_free_ai(1, limit=1))   # бонус
+        self.assertTrue(self.db.try_use_free_ai(1, limit=1))   # бонус
+        self.assertFalse(self.db.try_use_free_ai(1, limit=1))
+        self.assertEqual(self.db.free_ai_left(1, limit=1), 0)
+
+    def test_swap_seen_grades(self):
+        self.assertEqual(self.db.swap_seen_grades(1, 10), -1)
+        self.assertEqual(self.db.swap_seen_grades(1, 12), 10)
+        self.assertEqual(self.db.swap_seen_grades(1, 12), 12)

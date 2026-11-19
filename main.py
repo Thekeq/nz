@@ -2,12 +2,12 @@ import asyncio
 import logging
 from html import escape
 from loader import dp, bot, LOG_LEVEL, db, ADMIN_ID
-from handlers import auth, school, vip, admin, common
+from handlers import auth, school, vip, admin, common, parents
 from middlewares import ChannelSubscriptionMiddleware, MetricsMiddleware
 from services.background import (
     check_lessons, check_grades, check_homework, memory_cleaner_task,
     daily_backup_task, vip_expiry_task, morning_digest_task,
-    partner_vip_task, weekly_wrapped_task,
+    weekly_wrapped_task,
 )
 
 # Налаштування логування
@@ -56,6 +56,8 @@ async def main():
     dp.include_router(auth.router)
     dp.include_router(vip.router)
     dp.include_router(school.router)
+    # до common: там загальний /start, який інакше з'їв би /start p_<token>
+    dp.include_router(parents.router)
     dp.include_router(common.router)
 
     # Запуск фонових задач (із перезапуском при падінні)
@@ -66,7 +68,6 @@ async def main():
     asyncio.create_task(supervised("memory_cleaner", memory_cleaner_task))
     asyncio.create_task(supervised("daily_backup", daily_backup_task))
     asyncio.create_task(supervised("vip_expiry", vip_expiry_task))
-    asyncio.create_task(supervised("partner_vip", partner_vip_task))
     asyncio.create_task(supervised("weekly_wrapped", weekly_wrapped_task))
 
     # Запуск бота
