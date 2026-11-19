@@ -77,7 +77,7 @@ class RichMarkupTests(unittest.TestCase):
         self.assertIn("&amp;y=2", html)          # URL у href екранований
         self.assertIn("Уроків немає", text)      # день з одними «вікнами»
         self.assertNotIn("11:00", text)          # хвостове «вікно» обрізане
-        self.assertIn("вікно", text)             # а перше лишилось
+        self.assertIn("немає уроку", text)       # а перше лишилось
         self.assertIn("09:25–10:10", text)
 
     def test_schedule_tiktok_hides_link_tail(self):

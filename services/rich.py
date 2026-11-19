@@ -115,7 +115,7 @@ def visible_lessons(lessons: list[dict]) -> list[dict]:
 def _lesson_cell(lesson: dict, is_tiktok_mode: bool) -> str:
     subject = lesson["subject"]
     if subject == EMPTY_SUBJECT:
-        return "<i>вікно</i>"
+        return "<i>немає уроку</i>"
     url = lesson.get("meet")
     if not url:
         return esc(subject)
